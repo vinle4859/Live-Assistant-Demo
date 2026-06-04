@@ -1,0 +1,39 @@
+# Python environments and caches
+.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.serena/
+.spec-workflow/
+*.pyc
+*.pyo
+
+# Local environment files
+.env
+*.json
+*.jsonl
+*.pem
+*.key
+*.crt
+*credentials*
+*service-account*
+
+# Runtime/generated artifacts
+output/*
+!output/.gitkeep
+
+data/live_audio/*
+!data/live_audio/.gitkeep
+
+# Data-prep inputs/outputs not needed for live deployment
+data/Q&A/
+data/seed/
+data/web_faq_qa_vi.json
+
+# Temporary/debug scratch files
+.tmp_*.html
+tmp_*.py
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
