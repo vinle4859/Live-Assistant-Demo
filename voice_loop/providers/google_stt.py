@@ -230,6 +230,13 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
             for phrase in self.hint_phrases
             if phrase.strip()
         ]
+        LOGGER.info(
+            "Request streaming STT config: model=%s location=%s language_codes=%s hint_count=%d",
+            model_name,
+            self.location,
+            ",".join(language_codes),
+            len(phrase_entries),
+        )
         adaptation = None
         if phrase_entries:
             adaptation = cloud_speech.SpeechAdaptation(

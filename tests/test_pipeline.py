@@ -8,7 +8,7 @@ from pathlib import Path
 
 from voice_loop.db import KnowledgeBase, KnowledgeMatch
 from voice_loop.pipeline import VoicePipeline
-from voice_loop.transcript_cheats import TranscriptCheatRule
+from voice_loop.transcript_cheats import TranscriptCheatRule, apply_transcript_cheats
 
 
 class FakeSTTProvider:
@@ -134,6 +134,33 @@ class EchoQuestionLLMProvider:
         """Echo question text back as the generated answer."""
 
         return question
+
+
+def _greenwich_force_rules() -> tuple[TranscriptCheatRule, ...]:
+    context_terms = (
+        "university",
+        "truong",
+        "trường",
+        "dai hoc",
+        "đại học",
+        "hoc",
+        "học",
+        "sinh vien",
+        "vietnam",
+        "viet nam",
+        "việt nam",
+        "khac biet",
+        "khác biệt",
+        "so voi",
+        "so với",
+        "tuition",
+        "hoc phi",
+        "campus",
+    )
+    return tuple(
+        TranscriptCheatRule(wrong_phrase=wrong_phrase, corrected_phrase="greenwich", required_context_terms=context_terms)
+        for wrong_phrase in ("rmit", "huflit", "huflix", "huflex", "remix", "re mix")
+    )
 
 
 def _build_empty_pipeline(tmp_path: Path, llm_provider) -> VoicePipeline:
@@ -1260,6 +1287,33 @@ def test_pipeline_does_not_apply_transcript_cheat_without_context(tmp_path: Path
     assert response["resolved_source"] == "llm_direct"
     assert "remix" in response["response_text"].lower()
     assert "greenwich" not in response["response_text"].lower()
+
+
+def test_greenwich_force_rules_correct_vietnamese_university_substitutions() -> None:
+    """Deployment cheat rules hard-force known university substitutions to Greenwich."""
+
+    cases = [
+        "Khác biệt giữa trường đại học RMIT Việt Nam và các trường đại học khác là gì?",
+        "học đại học HUFLIT thì khác gì hơn so với học những đại học khác tại Việt Nam",
+        "Trường đại học remix",
+    ]
+
+    for transcript in cases:
+        corrected, applied = apply_transcript_cheats(transcript, _greenwich_force_rules())
+        assert applied
+        assert "greenwich" in corrected.lower()
+        assert "rmit" not in corrected.lower()
+        assert "huflit" not in corrected.lower()
+        assert "remix" not in corrected.lower()
+
+
+def test_greenwich_force_rules_leave_unrelated_remix_text_unchanged() -> None:
+    """Deployment cheat rules should not rewrite non-university remix phrases."""
+
+    corrected, applied = apply_transcript_cheats("play my remix playlist", _greenwich_force_rules())
+
+    assert corrected == "play my remix playlist"
+    assert applied == ()
 
 
 def test_pipeline_logs_llm_failure_type_and_reason(tmp_path: Path, caplog) -> None:

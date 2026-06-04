@@ -28,6 +28,33 @@ class _FakeTTSProvider:
         return output_path
 
 
+def _greenwich_force_rules() -> tuple[TranscriptCheatRule, ...]:
+    context_terms = (
+        "university",
+        "truong",
+        "trường",
+        "dai hoc",
+        "đại học",
+        "hoc",
+        "học",
+        "sinh vien",
+        "vietnam",
+        "viet nam",
+        "việt nam",
+        "khac biet",
+        "khác biệt",
+        "so voi",
+        "so với",
+        "tuition",
+        "hoc phi",
+        "campus",
+    )
+    return tuple(
+        TranscriptCheatRule(wrong_phrase=wrong_phrase, corrected_phrase="greenwich", required_context_terms=context_terms)
+        for wrong_phrase in ("rmit", "huflit", "huflix", "huflex", "remix", "re mix")
+    )
+
+
 def _build_pipeline(tmp_path: Path, rows: list[tuple[str, str, str, str, str, str]]) -> VoicePipeline:
     knowledge_base = KnowledgeBase(tmp_path / "knowledge.sqlite3", retrieval_mode="hybrid", confidence_low=0.55)
     knowledge_base.ensure_schema()
@@ -336,4 +363,32 @@ def test_greenwich_overview_pin_does_not_bind_non_identity_questions(tmp_path: P
     for prompt in prompts:
         response = asyncio.run(pipeline.process_transcription(prompt, "en"))
         assert response["resolved_source"] != "local_db"
+        assert "Overview answer" not in response["response_text"]
+
+
+def test_corrected_university_substitution_comparison_goes_to_llm_not_overview(tmp_path: Path) -> None:
+    pipeline = _build_pipeline(
+        tmp_path,
+        [
+            (
+                "vi",
+                "greenwich viet nam,greenwich viet nam la gi",
+                "Overview answer should not be used.",
+                "web-001",
+                "Overview",
+                "Greenwich Viet Nam la gi?",
+            ),
+        ],
+    )
+    pipeline.transcript_cheats = _greenwich_force_rules()
+
+    prompts = [
+        "Khác biệt giữa trường đại học RMIT Việt Nam và các trường đại học khác là gì?",
+        "học đại học HUFLIT thì khác gì hơn so với học những đại học khác tại Việt Nam",
+    ]
+
+    for prompt in prompts:
+        response = asyncio.run(pipeline.process_transcription(prompt, "vi"))
+        assert response["resolved_source"] == "llm_direct"
+        assert "greenwich" in response["response_text"].lower()
         assert "Overview answer" not in response["response_text"]
