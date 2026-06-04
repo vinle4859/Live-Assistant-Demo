@@ -1,6 +1,6 @@
 # Deployment
 
-This project is ready to hand off for live Docker deployment. The Docker team owns the Dockerfile or compose setup; this repo provides the runtime contract, environment template, data file, and validation commands.
+This project is ready to hand off for live Docker deployment. The repo includes a starter `Dockerfile`; the Docker team still owns host-specific device passthrough, compose/Kubernetes manifests, image registry, and production rollout.
 
 ## Runtime Shape
 
@@ -23,6 +23,7 @@ This project is ready to hand off for live Docker deployment. The Docker team ow
 ## Docker Handoff
 
 See `DOCKER_HANDOFF.md` for:
+- the starter Dockerfile
 - image content boundaries
 - cloud credential options
 - audio passthrough notes
@@ -42,6 +43,7 @@ VOICE_LOOP_STT_LOCATION=global
 ## Deployment Package
 
 Include:
+- `Dockerfile`
 - `main.py`
 - `voice_loop/`
 - `requirements.txt`

@@ -16,7 +16,10 @@ This project is a live microphone CLI assistant. It is not an HTTP service and d
 
 ## Image Contents
 
+The repo includes a starter `Dockerfile` for the runtime image. The Docker team should treat it as the base deployment image and add host-specific compose/Kubernetes wiring outside this app repo.
+
 Include:
+- `Dockerfile`
 - `main.py`
 - `voice_loop/`
 - `requirements.txt`
@@ -108,7 +111,13 @@ python -m pytest
 Runtime container smoke validation:
 
 ```bash
-python main.py --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-language en
+docker build -t live-assistant-demo .
+docker run --rm \
+  --env-file .env \
+  -v /path/to/google-credentials.json:/run/secrets/google-credentials.json:ro \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/google-credentials.json \
+  live-assistant-demo \
+  python main.py --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-language en
 ```
 
 Live host validation:

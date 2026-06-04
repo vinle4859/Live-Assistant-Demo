@@ -17,6 +17,7 @@ python main.py --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-lan
 ```
 
 Docker integration requirements:
+- Build from the included `Dockerfile`.
 - Include `main.py`, `voice_loop/`, `requirements.txt`, `.env.example`, deployment docs, and `data/knowledge_base.sqlite3`.
 - Exclude `.env`, `.venv/`, `output/`, tests/tools from the runtime image, runtime audio, caches, and credential files.
 - Provide Google Cloud credentials through mounted ADC/service-account JSON or Workload Identity.
