@@ -51,7 +51,7 @@ def _greenwich_force_rules() -> tuple[TranscriptCheatRule, ...]:
     )
     return tuple(
         TranscriptCheatRule(wrong_phrase=wrong_phrase, corrected_phrase="greenwich", required_context_terms=context_terms)
-        for wrong_phrase in ("rmit", "huflit", "huflix", "huflex", "remix", "re mix")
+        for wrong_phrase in ("rmit", "huflit", "huflix", "huflex", "hutech", "greenwood", "green rich", "greenrich", "remix", "re mix")
     )
 
 

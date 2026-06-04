@@ -164,8 +164,9 @@ Useful environment variables:
 - `VOICE_LOOP_CONTEXT_LINK_SHORT_QUERY_MAX_TOKENS` - max tokens considered a short follow-up query
 - `VOICE_LOOP_CONTEXT_LINK_MIN_SCORE_DELTA` - minimum retrieval score improvement required to accept context expansion
 - `GOOGLE_CLOUD_PROJECT` - Google Cloud project ID for Vertex AI Gemini
-- `GOOGLE_CLOUD_LOCATION` - Vertex AI region, defaults to `us-central1`
-- `GEMINI_MODEL` - optional, defaults to `gemini-2.0-flash`
+- `GOOGLE_CLOUD_LOCATION` - Vertex AI Gemini location, defaults to `global`
+- `GEMINI_MODEL` - optional, defaults to `gemini-3.1-flash-lite`
+- `GEMINI_FALLBACK_MODEL` - optional availability fallback, defaults to `gemini-2.5-flash`
 
 ## Live Mixed Test Workflow
 
@@ -256,7 +257,7 @@ If wake-word detection fails, set `VOICE_LOOP_LOG_LEVEL=DEBUG` and check:
 - `rms`/`peak` near zero (e.g., `rms=0.5`, `peak=1.0`) means the mic stream is effectively silent -> wrong/muted input device is the top issue.
 - Repeated empty wake transcripts with non-silent audio usually means phrase timing/noise issues; increase `VOICE_LOOP_WAKE_WINDOW_SECONDS` and set `VOICE_LOOP_STT_HINT_PHRASES`.
 
-For production on GKE, use Workload Identity so the app gets Application Default Credentials from the pod identity. Do not set `GOOGLE_APPLICATION_CREDENTIALS` in that deployment path. For Gemini on Vertex AI, set `GOOGLE_CLOUD_PROJECT` and optionally `GOOGLE_CLOUD_LOCATION` and `GEMINI_MODEL`.
+For production on GKE, use Workload Identity so the app gets Application Default Credentials from the pod identity. Do not set `GOOGLE_APPLICATION_CREDENTIALS` in that deployment path. For Gemini on Vertex AI, set `GOOGLE_CLOUD_PROJECT`; the tested Gemini defaults are `GOOGLE_CLOUD_LOCATION=global`, `GEMINI_MODEL=gemini-3.1-flash-lite`, and `GEMINI_FALLBACK_MODEL=gemini-2.5-flash`.
 
 ## Build Sample QA Dataset (VN/EN)
 

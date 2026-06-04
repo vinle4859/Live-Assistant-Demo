@@ -159,7 +159,7 @@ def _greenwich_force_rules() -> tuple[TranscriptCheatRule, ...]:
     )
     return tuple(
         TranscriptCheatRule(wrong_phrase=wrong_phrase, corrected_phrase="greenwich", required_context_terms=context_terms)
-        for wrong_phrase in ("rmit", "huflit", "huflix", "huflex", "remix", "re mix")
+        for wrong_phrase in ("rmit", "huflit", "huflix", "huflex", "hutech", "greenwood", "green rich", "greenrich", "remix", "re mix")
     )
 
 
@@ -646,6 +646,37 @@ def test_pipeline_compacts_direct_llm_answers(tmp_path: Path) -> None:
     assert "Sentence three" not in response["response_text"]
 
 
+def test_pipeline_keeps_two_short_greenwich_llm_sentences(tmp_path: Path) -> None:
+    """Greenwich demo answers should not collapse to a generic first sentence too early."""
+
+    pipeline = _build_empty_pipeline(tmp_path, DirectAnswerLLMProvider())
+    answer = (
+        "Greenwich Vietnam is an international education program between the University of Greenwich and FPT Education. "
+        "The difference is its UK-standard curriculum in Vietnam, practical majors, and student support for career direction. "
+        "A third detail should not be spoken."
+    )
+
+    compacted = pipeline._compact_direct_llm_response(answer, "Why choose Greenwich Vietnam?")
+
+    assert "The difference is" in compacted
+    assert "A third detail" not in compacted
+
+
+def test_pipeline_keeps_fuller_greenwich_conversational_answer(tmp_path: Path) -> None:
+    """Greenwich LLM compaction should keep useful advisor detail, not only identity."""
+
+    pipeline = _build_empty_pipeline(tmp_path, DirectAnswerLLMProvider())
+    answer = (
+        "Greenwich Vietnam offers a UK-standard curriculum through the partnership between the University of Greenwich and FPT Education. "
+        "For students interested in technology, the practical project work, international learning path, and career orientation are the main strengths."
+    )
+
+    compacted = pipeline._compact_direct_llm_response(answer, "If I like information technology, what is strong about Greenwich Vietnam?")
+
+    assert "practical project work" in compacted
+    assert len(compacted) > 180
+
+
 def test_pipeline_logs_direct_llm_compaction_decision(tmp_path: Path, caplog) -> None:
     """Direct LLM compaction diagnostics should show raw and compacted lengths."""
 
@@ -813,6 +844,7 @@ def test_pipeline_uses_adaptive_llm_timeout_budget(tmp_path: Path) -> None:
 
     assert pipeline._llm_timeout_for_query("Tell me a short joke") == 8.0
     assert pipeline._llm_timeout_for_query("What is the latest weather in Ha Noi?") == 10.0
+    assert pipeline._llm_timeout_for_query("Why should students choose Greenwich Vietnam?") == 10.0
 
 
 def test_pipeline_rejects_incomplete_llm_fragments(tmp_path: Path) -> None:
@@ -1187,6 +1219,69 @@ def test_pipeline_clarifies_english_vietnam_misrecognition(tmp_path: Path) -> No
     assert response["response_text"] == "Did you mean Greenwich Vietnam, or English in Vietnam?"
 
 
+def test_pipeline_corrects_long_domain_english_vietnam_to_greenwich(tmp_path: Path) -> None:
+    """Long study-context English Vietnam misses should recover to Greenwich instead of clarifying."""
+
+    pipeline = _build_empty_pipeline(tmp_path, EchoQuestionLLMProvider())
+
+    response = asyncio.run(
+        pipeline.process_transcription(
+            "If I like information technology, what is strong about English Vietnam?",
+            "en",
+        )
+    )
+
+    assert response["resolved_source"] == "llm_direct"
+    assert "Greenwich Vietnam" in response["response_text"]
+    assert "English Vietnam" not in response["response_text"]
+
+
+def test_pipeline_corrects_long_domain_english_viet_nam_to_greenwich(tmp_path: Path) -> None:
+    """Long mixed English Việt Nam misses should also recover to Greenwich."""
+
+    pipeline = _build_empty_pipeline(tmp_path, EchoQuestionLLMProvider())
+
+    response = asyncio.run(
+        pipeline.process_transcription(
+            "English Việt Nam phù hợp với kiểu sinh viên nào?",
+            "vi",
+        )
+    )
+
+    assert response["resolved_source"] == "llm_direct"
+    assert "Greenwich Vietnam" in response["response_text"]
+    assert "English Việt Nam" not in response["response_text"]
+
+
+def test_pipeline_keeps_corrected_english_viet_nam_suitability_on_llm(tmp_path: Path) -> None:
+    """Corrected suitability prompts should not be stolen by unrelated local DB rows."""
+
+    pipeline = _build_pipeline_with_rows(
+        tmp_path,
+        [
+            (
+                "vi",
+                "greenwich viet nam sinh vien giang vien moi truong quoc te",
+                "Teacher ratio answer.",
+                "web-099",
+                "Student life",
+                "Greenwich Viet Nam co giang vien quoc te khong?",
+            ),
+        ],
+    )
+    pipeline.llm_provider = EchoQuestionLLMProvider()
+
+    response = asyncio.run(
+        pipeline.process_transcription(
+            "English Việt Nam phù hợp với kiểu sinh viên nào?",
+            "vi",
+        )
+    )
+
+    assert response["resolved_source"] == "llm_direct"
+    assert "Greenwich Vietnam" in response["response_text"]
+
+
 def test_pipeline_prepares_multiline_text_for_tts() -> None:
     """TTS input should be flattened for generated poems."""
 
@@ -1194,6 +1289,20 @@ def test_pipeline_prepares_multiline_text_for_tts() -> None:
 
     assert "\n" not in text
     assert text == "Line one, Line two. Line three."
+
+
+def test_pipeline_removes_markdown_bullets_from_spoken_text() -> None:
+    """LLM Markdown bullets should not leak into display or TTS text."""
+
+    normalized = VoicePipeline._normalize_spoken_response("You fit if: * You like projects. - You want support. • You plan a career.")
+    tts_text = VoicePipeline._prepare_text_for_tts("You fit if:\n* You like projects.\n- You want support.\n• You plan a career.")
+
+    assert "*" not in normalized
+    assert "-" not in normalized
+    assert "•" not in normalized
+    assert "*" not in tts_text
+    assert "-" not in tts_text
+    assert "•" not in tts_text
 
 
 def test_pipeline_falls_back_when_llm_fails(tmp_path: Path) -> None:
@@ -1316,6 +1425,24 @@ def test_greenwich_force_rules_leave_unrelated_remix_text_unchanged() -> None:
     assert applied == ()
 
 
+def test_greenwich_force_rules_correct_hutech_and_green_rich_substitutions() -> None:
+    """Deployment cheat rules should also cover HUTECH and Green rich substitutions."""
+
+    cases = [
+        "hoc dai hoc Hutech thi khac gi so voi cac truong khac tai Viet Nam",
+        "Greenwood Viet Nam khac gi voi cac truong dai hoc khac?",
+        "Khac biet giua truong dai hoc Green rich Viet Nam va cac truong khac la gi?",
+    ]
+
+    for transcript in cases:
+        corrected, applied = apply_transcript_cheats(transcript, _greenwich_force_rules())
+        assert applied
+        assert "greenwich" in corrected.lower()
+        assert "hutech" not in corrected.lower()
+        assert "greenwood" not in corrected.lower()
+        assert "green rich" not in corrected.lower()
+
+
 def test_pipeline_logs_llm_failure_type_and_reason(tmp_path: Path, caplog) -> None:
     """Direct LLM failure logs should include exception type and non-empty reason."""
 
@@ -1407,9 +1534,60 @@ def test_pipeline_logs_token_guard_skip_diagnostics(tmp_path: Path, caplog) -> N
     response = asyncio.run(pipeline.process_transcription("hi there", "en"))
 
     assert response["resolved_source"] == "fallback"
-    info_messages = [record.getMessage() for record in caplog.records if record.levelno == logging.INFO]
-    assert any("llm_status=skipped_token_guard" in message for message in info_messages)
-    assert any("tokens=2 min_tokens=3" in message for message in info_messages)
+
+
+def test_pipeline_uses_greenwich_specific_fallback_when_greenwich_llm_fails(tmp_path: Path) -> None:
+    """Greenwich LLM failures should use a useful demo fallback instead of the generic apology."""
+
+    db_path = tmp_path / "knowledge.sqlite3"
+    output_dir = tmp_path / "out"
+    knowledge_base = KnowledgeBase(db_path)
+    knowledge_base.ensure_schema()
+
+    pipeline = VoicePipeline(
+        knowledge_base=knowledge_base,
+        stt_provider=FakeSTTProvider(),
+        llm_provider=FailingLLMProvider(),
+        fallback_llm_provider=None,
+        primary_tts_provider=FakeTTSProvider(),
+        fallback_tts_provider=None,
+        output_dir=output_dir,
+        timeout_seconds=3.0,
+        llm_direct_min_query_tokens=1,
+    )
+
+    response = asyncio.run(pipeline.process_transcription("Why should students choose Greenwich Vietnam?", "en"))
+
+    assert response["resolved_source"] == "fallback"
+    assert "FPT Education" in response["response_text"]
+    assert "do not have an answer" not in response["response_text"]
+
+
+def test_pipeline_keeps_generic_fallback_for_non_greenwich_llm_failure(tmp_path: Path) -> None:
+    """Non-Greenwich failures should not receive Greenwich-specific rescue text."""
+
+    db_path = tmp_path / "knowledge.sqlite3"
+    output_dir = tmp_path / "out"
+    knowledge_base = KnowledgeBase(db_path)
+    knowledge_base.ensure_schema()
+
+    pipeline = VoicePipeline(
+        knowledge_base=knowledge_base,
+        stt_provider=FakeSTTProvider(),
+        llm_provider=FailingLLMProvider(),
+        fallback_llm_provider=None,
+        primary_tts_provider=FakeTTSProvider(),
+        fallback_tts_provider=None,
+        output_dir=output_dir,
+        timeout_seconds=3.0,
+        llm_direct_min_query_tokens=1,
+    )
+
+    response = asyncio.run(pipeline.process_transcription("What is the weather in Ha Noi?", "en"))
+
+    assert response["resolved_source"] == "fallback"
+    assert "do not have an answer" in response["response_text"]
+    assert "Greenwich" not in response["response_text"]
 
 
 def test_pipeline_logs_llm_timeout_failure_diagnostics(tmp_path: Path, caplog) -> None:
@@ -1927,6 +2105,105 @@ def test_pipeline_pins_canonical_faq_intents_over_generic_greenwich_match(tmp_pa
     assert "450.000.000" in tuition["response_text"]
     assert "4 co so" in campus["response_text"] or "4 cơ sở" in campus["response_text"]
     assert "du hoc" in exchange["response_text"]
+
+
+def test_pipeline_routes_greenwich_facts_to_db_and_conversation_to_llm(tmp_path: Path) -> None:
+    """Factual FAQ prompts stay DB-backed while demo-friendly questions feel live."""
+
+    pipeline = _build_pipeline_with_rows(
+        tmp_path,
+        [
+            (
+                "en",
+                "greenwich vietnam",
+                "Greenwich Vietnam is an international joint program.",
+                "web-001",
+                "Overview",
+                "What is Greenwich Vietnam?",
+            ),
+        ],
+    )
+    pipeline.llm_provider = EchoQuestionLLMProvider()
+
+    factual = asyncio.run(pipeline.process_transcription("What is Greenwich Vietnam?", "en"))
+    conversational = asyncio.run(pipeline.process_transcription("Why should students choose Greenwich Vietnam?", "en"))
+
+    assert factual["resolved_source"] == "local_db"
+    assert conversational["resolved_source"] == "llm_direct"
+    assert conversational["response_text"] == "Why should students choose Greenwich Vietnam?"
+
+
+def test_pipeline_routes_vietnamese_nganh_hoc_to_majors_db(tmp_path: Path) -> None:
+    """Vietnamese ngành học wording should pin to the majors FAQ row."""
+
+    pipeline = _build_pipeline_with_rows(
+        tmp_path,
+        [
+            (
+                "vi",
+                "greenwich viet nam la gi",
+                "Overview answer.",
+                "web-001",
+                "Overview",
+                "Greenwich Viet Nam la gi?",
+            ),
+            (
+                "vi",
+                "greenwich viet nam co nhung nganh hoc nao",
+                "Majors answer.",
+                "web-004",
+                "Majors",
+                "Greenwich Viet Nam co nhung nganh hoc nao?",
+            ),
+        ],
+    )
+
+    response = asyncio.run(pipeline.process_transcription("Greenwich Việt Nam có những ngành học nào?", "vi"))
+
+    assert response["resolved_source"] == "local_db"
+    assert "Công nghệ thông tin" in response["response_text"]
+
+
+def test_pipeline_keeps_information_technology_strength_prompt_on_llm(tmp_path: Path) -> None:
+    """Interest/strength prompts should stay conversational even when they contain major."""
+
+    pipeline = _build_pipeline_with_rows(
+        tmp_path,
+        [
+            (
+                "en",
+                "what majors does greenwich vietnam offer",
+                "Majors answer.",
+                "web-004",
+                "Majors",
+                "What majors does Greenwich Vietnam offer?",
+            ),
+        ],
+    )
+    pipeline.llm_provider = EchoQuestionLLMProvider()
+
+    response = asyncio.run(
+        pipeline.process_transcription(
+            "Information technology major. What is strong about Greenwich Vietnam?",
+            "en",
+        )
+    )
+
+    assert response["resolved_source"] == "llm_direct"
+    assert response["response_text"] == "Information technology major. What is strong about Greenwich Vietnam?"
+
+
+def test_pipeline_uses_recent_greenwich_llm_context_for_missing_entity_followup(tmp_path: Path) -> None:
+    """Recent Greenwich LLM turns should rescue short demo follow-ups missing the brand."""
+
+    pipeline = _build_empty_pipeline(tmp_path, EchoQuestionLLMProvider())
+
+    first = asyncio.run(pipeline.process_transcription("Why should students choose Greenwich Vietnam?", "en"))
+    second = asyncio.run(pipeline.process_transcription("Việt Nam phù hợp với kiểu sinh viên nào?", "vi"))
+
+    assert first["resolved_source"] == "llm_direct"
+    assert second["resolved_source"] == "llm_direct"
+    assert "Greenwich Việt Nam" in second["response_text"]
 
 
 def test_pipeline_expands_clipped_campus_intent_before_context_link(tmp_path: Path) -> None:

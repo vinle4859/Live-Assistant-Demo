@@ -83,6 +83,7 @@ class VoicePipeline:
         self.context_link_min_score_delta = max(0.0, min(1.0, context_link_min_score_delta))
         self.transcript_cheats = transcript_cheats
         self._context_anchor: _ContextAnchor | None = None
+        self._greenwich_llm_context_turns_remaining = 0
 
     async def process_transcription(self, transcription: str, language: LanguageCode) -> PipelineResponse:
         """Resolve a precomputed transcript through DB/LLM routing and synthesize output audio."""
@@ -109,6 +110,20 @@ class VoicePipeline:
             LOGGER.info(
                 "Transcript cheats applied (%s): %s",
                 ", ".join(applied_cheats),
+                transcription,
+            )
+        transcription, guarded_corrections = self._correct_guarded_greenwich_misrecognitions(transcription)
+        if guarded_corrections:
+            LOGGER.info(
+                "Guarded Greenwich corrections applied (%s): %s",
+                ", ".join(guarded_corrections),
+                transcription,
+            )
+        transcription, context_corrections = self._apply_greenwich_llm_context(transcription)
+        if context_corrections:
+            LOGGER.info(
+                "Greenwich LLM context applied (%s): %s",
+                ", ".join(context_corrections),
                 transcription,
             )
         self._advance_context_anchor()
@@ -176,11 +191,13 @@ class VoicePipeline:
                     thinking_cue_delay_seconds,
                     thinking_cue_callback,
                 )
-                response_text = self._compact_direct_llm_response(llm_result.answer) if llm_result.answer else ""
+                response_text = self._compact_direct_llm_response(llm_result.answer, routed_query) if llm_result.answer else ""
                 llm_status = llm_result.status
                 llm_failure_type = llm_result.failure_type
                 llm_elapsed_ms = (time.perf_counter() - llm_started_at) * 1000.0
                 resolved_source = "llm_direct" if response_text else "fallback"
+                if response_text and self._is_greenwich_context_query(routed_query):
+                    self._update_greenwich_llm_context()
                 if not response_text:
                     if self._should_repeat_after_failed_direct_llm(
                         routed_query,
@@ -188,6 +205,8 @@ class VoicePipeline:
                         language_reason,
                     ):
                         response_text = self._repeat_request_phrase(language)
+                    elif self._is_greenwich_context_query(routed_query):
+                        response_text = self._greenwich_failed_llm_fallback_phrase(language)
                     else:
                         response_text = self._fallback_phrase(language)
             else:
@@ -352,7 +371,8 @@ class VoicePipeline:
         protected = re.sub(r"(\d)\.(\d)", r"\1<DECIMAL_DOT>\2", protected)
         without_urls = re.sub(r"https?://\S+", "", protected)
         fixed_spacing = re.sub(r"(?<=[.!?])(?=[^\s])", " ", without_urls)
-        flattened = re.sub(r"[\r\n]+", " ", fixed_spacing)
+        without_markdown_bullets = re.sub(r"(^|\s)[*\u2022-]\s+", r"\1", fixed_spacing)
+        flattened = re.sub(r"[\r\n]+", " ", without_markdown_bullets)
         flattened = re.sub(r"\s+", " ", flattened).strip(" -")
         return flattened.replace("<DECIMAL_DOT>", ".").replace("<DOT>", ".")
 
@@ -501,6 +521,8 @@ class VoicePipeline:
         tokens = set(_TOKEN_RE.findall(normalized))
         if not tokens:
             return None
+        if self._is_greenwich_conversational_intent(tokens):
+            return None
 
         if language == "vi":
             asks_graduation = {"chuan", "dau", "ra"} <= tokens or "tot" in tokens and "nghiep" in tokens
@@ -522,6 +544,8 @@ class VoicePipeline:
             if {"tieng", "anh"} <= tokens and ({"dau", "vao"} & tokens or {"trinh", "do"} & tokens):
                 return "web-012"
             if {"chuyen", "nganh"} <= tokens or {"dao", "tao", "nganh"} <= tokens:
+                return "web-004"
+            if {"nganh", "hoc"} <= tokens or ("nganh" in tokens and {"nao", "nhung", "co"} & tokens):
                 return "web-004"
             if {"thoi", "gian"} <= tokens or {"bao", "lau"} <= tokens:
                 return "web-006"
@@ -571,11 +595,17 @@ class VoicePipeline:
     def _advance_context_anchor(self) -> None:
         """Decay short-lived anchor state once per turn."""
 
-        if self._context_anchor is None:
-            return
-        self._context_anchor.turns_remaining -= 1
-        if self._context_anchor.turns_remaining <= 0:
-            self._context_anchor = None
+        if self._greenwich_llm_context_turns_remaining > 0:
+            self._greenwich_llm_context_turns_remaining -= 1
+        if self._context_anchor is not None:
+            self._context_anchor.turns_remaining -= 1
+            if self._context_anchor.turns_remaining <= 0:
+                self._context_anchor = None
+
+    def _update_greenwich_llm_context(self) -> None:
+        """Keep a short Greenwich anchor from successful conversational LLM turns."""
+
+        self._greenwich_llm_context_turns_remaining = self.context_link_max_turn_gap
 
     def _update_context_anchor(self, db_match: KnowledgeMatch) -> None:
         """Persist a short topic anchor from high-confidence local matches."""
@@ -651,6 +681,45 @@ class VoicePipeline:
         }
         return any(token in followup_markers for token in tokens)
 
+    def _apply_greenwich_llm_context(self, query: str) -> tuple[str, tuple[str, ...]]:
+        """Recover short Greenwich demo follow-ups after a successful Greenwich LLM turn."""
+
+        if self._greenwich_llm_context_turns_remaining <= 0:
+            return query, ()
+        tokens = set(_TOKEN_RE.findall(self._normalize_for_context(query)))
+        if not tokens or self._is_greenwich_context_query(query):
+            return query, ()
+        if self._is_current_information_query(query):
+            return query, ()
+        if not self._is_greenwich_conversational_intent(tokens):
+            return query, ()
+        if not ({"viet", "nam"} <= tokens or "vietnam" in tokens):
+            return query, ()
+        return f"Greenwich {query}".strip(), ("recent_greenwich_llm_context",)
+
+    @staticmethod
+    def _is_greenwich_conversational_intent(tokens: set[str]) -> bool:
+        """Return whether a Greenwich question should stay live/advisory instead of FAQ-pinned."""
+
+        return bool(
+            {"why", "choose"} <= tokens
+            or {"khac", "gi"} <= tokens
+            or {"diem", "manh"} <= tokens
+            or {"phu", "hop"} <= tokens
+            or tokens
+            & {
+                "advisor",
+                "different",
+                "difference",
+                "fit",
+                "recommend",
+                "strong",
+                "strength",
+                "strengths",
+                "suitable",
+            }
+        )
+
     def _should_accept_local_db_match(
         self,
         db_match: KnowledgeMatch,
@@ -674,6 +743,10 @@ class VoicePipeline:
     ) -> _LocalDbRoutingDecision:
         """Return the local-DB routing decision for a retrieval candidate."""
 
+        query_tokens = set(_TOKEN_RE.findall(self._normalize_for_context(query)))
+        if self._is_greenwich_context_query(query) and self._is_greenwich_conversational_intent(query_tokens):
+            self._log_rejected_local_db_match(db_match, query, "greenwich_conversational_intent")
+            return _LocalDbRoutingDecision("reject_to_llm", "greenwich_conversational_intent")
         if db_match.score < self.knowledge_base.confidence_low:
             return _LocalDbRoutingDecision("reject_to_llm", "below_confidence")
         if db_match.retrieval_mode.endswith("_intent"):
@@ -975,7 +1048,7 @@ class VoicePipeline:
     def _llm_timeout_for_query(self, query: str) -> float:
         """Return the live direct-answer budget for the current query shape."""
 
-        requested_budget = 10.0 if self._is_current_information_query(query) else 8.0
+        requested_budget = 10.0 if self._is_current_information_query(query) or self._is_greenwich_context_query(query) else 8.0
         return max(0.001, min(self.llm_timeout_seconds, requested_budget))
 
     @classmethod
@@ -1047,13 +1120,67 @@ class VoicePipeline:
                 if language == "vi"
                 else "Which Greenwich Vietnam topic do you mean?"
             )
-        if token_set == {"what", "is", "english", "vietnam"}:
+        if token_set == {"what", "is", "english", "vietnam"} or token_set == {"what", "is", "english", "viet", "nam"}:
             return (
                 "Ban muon hoi ve Greenwich Viet Nam, hay tieng Anh o Viet Nam?"
                 if language == "vi"
                 else "Did you mean Greenwich Vietnam, or English in Vietnam?"
             )
         return ""
+
+    @classmethod
+    def _correct_guarded_greenwich_misrecognitions(cls, query: str) -> tuple[str, tuple[str, ...]]:
+        """Correct long-form Greenwich-like entity misses without overriding clean ambiguity."""
+
+        tokens = _TOKEN_RE.findall(cls._normalize_for_context(query))
+        if not tokens:
+            return query, ()
+        token_set = set(tokens)
+        if token_set == {"what", "is", "english", "vietnam"} or token_set == {"what", "is", "english", "viet", "nam"}:
+            return query, ()
+        if not cls._has_greenwich_domain_context(token_set):
+            return query, ()
+
+        corrected = query
+        labels: list[str] = []
+        corrected, replacements = re.subn(
+            r"(?<![A-Za-z0-9])English\s+(?:Vietnam|Viet\s+Nam|Việt\s+Nam)(?![A-Za-z0-9])",
+            "Greenwich Vietnam",
+            corrected,
+            flags=re.IGNORECASE,
+        )
+        if replacements:
+            labels.append("english vietnam=>greenwich vietnam")
+        return corrected, tuple(labels)
+
+    @staticmethod
+    def _has_greenwich_domain_context(token_set: set[str]) -> bool:
+        """Return whether a query has enough study/admissions context for guarded correction."""
+
+        return bool(
+            token_set
+            & {
+                "admission",
+                "dai",
+                "diem",
+                "difference",
+                "hoc",
+                "information",
+                "it",
+                "khac",
+                "major",
+                "majors",
+                "manh",
+                "nganh",
+                "phu",
+                "student",
+                "students",
+                "study",
+                "suitable",
+                "technology",
+                "university",
+            }
+        )
 
     @classmethod
     def _is_bare_greenwich_entity_query(cls, tokens: list[str]) -> bool:
@@ -1083,11 +1210,12 @@ class VoicePipeline:
             return True
         return False
 
-    def _compact_direct_llm_response(self, response_text: str) -> str:
+    def _compact_direct_llm_response(self, response_text: str, query: str = "") -> str:
         """Keep direct LLM answers short enough for spoken interaction."""
 
         normalized = self._normalize_spoken_response(response_text)
         raw_length = len(response_text)
+        length_limit = 420 if self._is_greenwich_context_query(query) else 220
         if not normalized:
             self._log_direct_llm_compaction(raw_length, 0, "empty_normalized", False, response_text, "")
             return normalized
@@ -1100,19 +1228,19 @@ class VoicePipeline:
         if incomplete_ending:
             self._log_direct_llm_compaction(raw_length, 0, "rejected_incomplete", True, response_text, normalized)
             return ""
-        if len(normalized) <= 220:
+        if len(normalized) <= length_limit:
             self._log_direct_llm_compaction(raw_length, len(normalized), decision, False, response_text, normalized)
             return normalized
         complete_sentence = self._first_complete_sentence(normalized)
         if complete_sentence:
             self._log_direct_llm_compaction(raw_length, len(complete_sentence), "first_complete_sentence", False, response_text, complete_sentence)
             return complete_sentence
-        truncated = normalized[:220].rsplit(" ", 1)[0].rstrip(".,;:-")
+        truncated = normalized[:length_limit].rsplit(" ", 1)[0].rstrip(".,;:-")
         incomplete_ending = self._has_incomplete_spoken_ending(truncated)
         if incomplete_ending:
             self._log_direct_llm_compaction(raw_length, 0, "rejected_truncated_incomplete", True, response_text, truncated)
             return ""
-        compacted = truncated or normalized[:220].rstrip()
+        compacted = truncated or normalized[:length_limit].rstrip()
         self._log_direct_llm_compaction(raw_length, len(compacted), "truncated", False, response_text, compacted)
         return compacted
 
@@ -1279,6 +1407,7 @@ class VoicePipeline:
         """Flatten generated text so TTS does not stumble over multiline output."""
 
         flattened = re.sub(r"[\r\n]+", " ", text)
+        flattened = re.sub(r"(^|\s)[*\u2022-]\s+", r"\1", flattened)
         flattened = re.sub(r"\s+", " ", flattened).strip()
         return flattened or text
 
@@ -1291,6 +1420,25 @@ class VoicePipeline:
             if language == "vi"
             else "I am sorry, I do not have an answer for that right now."
         )
+
+    @staticmethod
+    def _greenwich_failed_llm_fallback_phrase(language: LanguageCode) -> str:
+        """Return a Greenwich-specific rescue answer when LLM direct fails."""
+
+        return (
+            "Greenwich Việt Nam đào tạo theo chuẩn Anh Quốc thông qua liên kết giữa Đại học Greenwich và Tổ chức Giáo dục FPT. "
+            "Bạn có thể hỏi thêm về ngành học, học phí, cơ sở, tuyển sinh hoặc đời sống sinh viên."
+            if language == "vi"
+            else "Greenwich Vietnam offers UK-standard study in Vietnam through the University of Greenwich and FPT Education partnership. "
+            "You can ask me about majors, tuition, campuses, admissions, or student life."
+        )
+
+    @classmethod
+    def _is_greenwich_context_query(cls, query: str) -> bool:
+        """Return whether a transcript clearly refers to Greenwich."""
+
+        tokens = set(_TOKEN_RE.findall(cls._normalize_for_context(query)))
+        return "greenwich" in tokens or {"green", "which"} <= tokens
 
     @staticmethod
     def _repeat_request_phrase(language: LanguageCode) -> str:

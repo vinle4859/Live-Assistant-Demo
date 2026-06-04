@@ -163,8 +163,8 @@ def get_vertex_settings() -> tuple[str, str, str]:
     """Return Gemini runtime settings from environment variables."""
 
     project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
-    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1").strip() or "us-central1"
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite").strip() or "gemini-3.1-flash-lite"
     return project, location, model
 
 

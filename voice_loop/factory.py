@@ -70,10 +70,13 @@ def _build_llm_providers(config: AppConfig):
         if config.google_cloud_project:
             primary_provider = GeminiLLMProvider(
                 model=config.gemini_model,
+                fallback_model=config.gemini_fallback_model,
                 project=config.google_cloud_project,
                 location=config.google_cloud_location,
                 enable_google_search=config.llm_enable_google_search,
                 timeout_seconds=config.llm_timeout_seconds,
+                thinking_level=config.llm_thinking_level,
+                thinking_budget=config.llm_thinking_budget,
             )
             # In production wiring, skip heuristic secondary fallback to avoid question-echo responses
             # when cloud generation times out. Pipeline then uses the hard localized fallback phrase.

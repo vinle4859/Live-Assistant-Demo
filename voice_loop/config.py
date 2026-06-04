@@ -78,9 +78,12 @@ class AppConfig:
     context_link_short_query_max_tokens: int = 6
     context_link_min_score_delta: float = 0.08
     seed_demo_data: bool = True
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.1-flash-lite"
+    gemini_fallback_model: str = "gemini-2.5-flash"
+    llm_thinking_level: str = "minimal"
+    llm_thinking_budget: int = 0
     google_cloud_project: str = ""
-    google_cloud_location: str = "us-central1"
+    google_cloud_location: str = "global"
     log_level: str = "INFO"
     wake_word: str = "hey lemon"
     wake_aliases: tuple[str, ...] = ()
@@ -92,9 +95,9 @@ class AppConfig:
     wake_ack_adaptive_speak_on_wake: bool = True
     request_ready_cue_mode: str = "speech"
     request_ready_first_text_en: str = "Go ahead."
-    request_ready_first_text_vi: str = "Bạn hỏi đi."
-    request_ready_texts_en: tuple[str, ...] = ("Anything else?", "What else can I help with?", "Go ahead.")
-    request_ready_texts_vi: tuple[str, ...] = ("Bạn hỏi đi.", "Bạn hỏi tiếp đi.")
+    request_ready_first_text_vi: str = "Bạn cứ hỏi nhé."
+    request_ready_texts_en: tuple[str, ...] = ("What else would you like to know?", "I'm listening.", "Go ahead.")
+    request_ready_texts_vi: tuple[str, ...] = ("Bạn hỏi tiếp nhé.", "Mình nghe đây.", "Bạn cần hỏi thêm gì?")
     request_ready_cache: bool = True
     thinking_cue_enabled: bool = True
     thinking_cue_delay_seconds: float = 1.2
@@ -194,9 +197,12 @@ class AppConfig:
                 0.08,
             ),
             seed_demo_data=seed_demo_data,
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
+            gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash").strip(),
+            llm_thinking_level=os.getenv("VOICE_LOOP_LLM_THINKING_LEVEL", "minimal").strip(),
+            llm_thinking_budget=_parse_int(os.getenv("VOICE_LOOP_LLM_THINKING_BUDGET"), 0),
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT", ""),
-            google_cloud_location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+            google_cloud_location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
             log_level=os.getenv("VOICE_LOOP_LOG_LEVEL", "INFO"),
             wake_word=wake_word,
             wake_aliases=wake_aliases,
@@ -211,11 +217,11 @@ class AppConfig:
             ),
             request_ready_cue_mode=_parse_cue_mode(os.getenv("VOICE_LOOP_REQUEST_READY_CUE_MODE"), "speech"),
             request_ready_first_text_en=os.getenv("VOICE_LOOP_REQUEST_READY_FIRST_TEXT_EN", "Go ahead."),
-            request_ready_first_text_vi=os.getenv("VOICE_LOOP_REQUEST_READY_FIRST_TEXT_VI", "Bạn hỏi đi."),
+            request_ready_first_text_vi=os.getenv("VOICE_LOOP_REQUEST_READY_FIRST_TEXT_VI", "Bạn cứ hỏi nhé."),
             request_ready_texts_en=_parse_phrase_list(os.getenv("VOICE_LOOP_REQUEST_READY_TEXTS_EN"))
-            or ("Anything else?", "What else can I help with?", "Go ahead."),
+            or ("What else would you like to know?", "I'm listening.", "Go ahead."),
             request_ready_texts_vi=_parse_phrase_list(os.getenv("VOICE_LOOP_REQUEST_READY_TEXTS_VI"))
-            or ("Bạn hỏi đi.", "Bạn hỏi tiếp đi."),
+            or ("Bạn hỏi tiếp nhé.", "Mình nghe đây.", "Bạn cần hỏi thêm gì?"),
             request_ready_cache=_parse_bool(os.getenv("VOICE_LOOP_REQUEST_READY_CACHE"), True),
             thinking_cue_enabled=_parse_bool(os.getenv("VOICE_LOOP_THINKING_CUE_ENABLED"), True),
             thinking_cue_delay_seconds=_parse_float(os.getenv("VOICE_LOOP_THINKING_CUE_DELAY_SECONDS"), 1.2),

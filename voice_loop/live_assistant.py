@@ -56,9 +56,9 @@ class LiveAssistantConfig:
     wake_ack_adaptive_speak_on_wake: bool = True
     request_ready_cue_mode: str = "speech"
     request_ready_first_text_en: str = "Go ahead."
-    request_ready_first_text_vi: str = "Bạn hỏi đi."
-    request_ready_texts_en: tuple[str, ...] = ("Anything else?", "What else can I help with?", "Go ahead.")
-    request_ready_texts_vi: tuple[str, ...] = ("Bạn hỏi đi.", "Bạn hỏi tiếp đi.")
+    request_ready_first_text_vi: str = "Bạn cứ hỏi nhé."
+    request_ready_texts_en: tuple[str, ...] = ("What else would you like to know?", "I'm listening.", "Go ahead.")
+    request_ready_texts_vi: tuple[str, ...] = ("Bạn hỏi tiếp nhé.", "Mình nghe đây.", "Bạn cần hỏi thêm gì?")
     request_ready_cache: bool = True
     thinking_cue_enabled: bool = True
     thinking_cue_delay_seconds: float = 1.2
@@ -191,6 +191,7 @@ def is_sleep_command(transcript: str, language: LanguageCode) -> bool:
         return any(
             phrase in normalized_transcript
             for phrase in (
+                "dung nghe",
                 "tam dung",
                 "dung lai",
                 "ngu di",
@@ -231,8 +232,11 @@ def is_command_like_sleep_phrase(transcript: str) -> bool:
         "stop listening",
         "go to sleep",
         "sleep now",
+        "goodbye",
+        "bye",
         "exit",
         "quit",
+        "dung nghe",
         "tam dung",
         "dung lai",
         "ngu di",
@@ -1347,7 +1351,7 @@ class LiveVoiceAssistant:
         """Log the operator-facing commands and live-mode state."""
 
         LOGGER.info(
-            'Command card: wake="%s" aliases="%s" exit="stop listening | go to sleep | sleep now | exit | quit" '
+            'Command card: wake="%s" aliases="%s" exit_en="goodbye | stop listening | go to sleep | sleep now | exit | quit" exit_vi="tạm biệt | chào tạm biệt | dừng nghe | ngủ đi | thoát" '
             "language_mode=%s output_mode=%s output=%s barge_in=%s input_device=%s",
             self.config.wake_word,
             ", ".join(phrase for phrase in wake_phrases if phrase != self.config.wake_word) or "none",

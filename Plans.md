@@ -9,7 +9,7 @@
 
 ## Acceptance Checks
 - Normal live runs leave no `response_*.mp3`, `wake_*.wav`, `utterance_*.wav`, `status_*.mp3`, or `barge_in_*.wav` artifacts behind.
-- The user hears `Go ahead.` or `Bạn hỏi đi.` before the first post-wake request, then short follow-up cues for later turns.
+- The user hears `Go ahead.` or `Bạn cứ hỏi nhé.` before the first post-wake request, then short follow-up cues for later turns.
 - Slow direct LLM turns can play one thinking cue; local DB answers stay fast and cue-free.
 - Bare `Greenwich Vietnam` / `Greenwich Việt Nam` asks for clarification instead of routing to the overview row.
 - Weak or long noisy captures reprompt instead of forcing DB, context, or direct LLM answers.
@@ -25,7 +25,7 @@
 
 ## Current Defaults
 - Request ready cue: speech mode with rotating EN/VI prompts.
-- First request cue: `Go ahead.` / `Bạn hỏi đi.`
+- First request cue: `Go ahead.` / `Bạn cứ hỏi nhé.`
 - Thinking cue: enabled after `1.2s` for direct LLM only.
 - Direct LLM live budget: `8s` normally, `10s` for current/search-style prompts; `.env` LLM timeout is only the ceiling.
 - Primary TTS live fallback path: primary capped at `5s`; fallback capped at `5s`.

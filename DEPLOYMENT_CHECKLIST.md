@@ -8,7 +8,7 @@
 
 ## B. Environment
 - [ ] Create deployment `.env` from `.env.example`.
-- [ ] Set `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GEMINI_MODEL`.
+- [ ] Set `GOOGLE_CLOUD_PROJECT`; keep tested Gemini defaults `GOOGLE_CLOUD_LOCATION=global`, `GEMINI_MODEL=gemini-3.1-flash-lite`, and `GEMINI_FALLBACK_MODEL=gemini-2.5-flash` unless the target project lacks 3.1 access.
 - [ ] Set `VOICE_LOOP_DB_PATH=/app/data/knowledge_base.sqlite3` for Docker.
 - [ ] Set `VOICE_LOOP_OUTPUT_DIR=/app/output` for Docker.
 - [ ] Keep `VOICE_LOOP_QA_SEED_AUTO_SYNC=false`.

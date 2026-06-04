@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
+import unicodedata
 
 from ..types import LanguageCode
 from .base import LanguageModelProvider
 
 LOGGER = logging.getLogger(__name__)
-_MAX_OUTPUT_TOKENS = 768
+_MAX_OUTPUT_TOKENS = 1024
+_TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
 
 class HeuristicLLMProvider(LanguageModelProvider):
@@ -34,20 +37,27 @@ class GeminiLLMProvider(LanguageModelProvider):
 
     def __init__(
         self,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-3.1-flash-lite",
+        fallback_model: str = "",
         project: str = "",
-        location: str = "us-central1",
+        location: str = "global",
         enable_google_search: bool = True,
         timeout_seconds: float | None = None,
+        thinking_level: str = "minimal",
+        thinking_budget: int = 0,
     ) -> None:
         """Store the model name and Vertex AI placement used for completions."""
 
         self.model = model
+        self.fallback_model = fallback_model
         self.project = project
         self.location = location
         self.enable_google_search = enable_google_search
         self.timeout_seconds = timeout_seconds
+        self.thinking_level = thinking_level
+        self.thinking_budget = thinking_budget
         self._client = None
+        self._primary_model_unavailable = False
 
     async def generate_answer(self, language: LanguageCode, question: str) -> str:
         """Call the Gemini API asynchronously and return the generated answer."""
@@ -64,31 +74,194 @@ class GeminiLLMProvider(LanguageModelProvider):
         if self._client is None:
             self._client = genai.Client(vertexai=True, project=self.project, location=self.location)
         client = self._client
-        language_name = "Vietnamese" if language == "vi" else "English"
-        system_prompt = (
-            "You are a concise assistant. Answer in exactly the requested language using general knowledge. "
-            "Use Google Search when current information is needed, such as weather, news, or recent events. "
-            "Produce a complete spoken answer in this first response. If a location is required and missing, ask for the city. "
-            "Answer in 1-3 short sentences, under about 60 words. For list requests, use up to 2 short bullets. "
-            "For poems, use at most 4 short lines."
-        )
-        user_prompt = f"Language: {language_name}\nQuestion: {question}"
-        tools = [types.Tool(googleSearch=types.GoogleSearch())] if self.enable_google_search else None
+        system_prompt = self._build_system_prompt(language, question)
+        user_prompt = self._build_user_prompt(language, question)
+        search_enabled_for_request = self.enable_google_search and self._should_enable_search(question)
+        tools = [types.Tool(googleSearch=types.GoogleSearch())] if search_enabled_for_request else None
+        active_model = self.fallback_model if self._primary_model_unavailable and self.fallback_model else self.model
+        thinking_config = self._build_thinking_config(types, active_model)
         LOGGER.info(
-            "Gemini request diagnostics: model=%s language=%s question_chars=%d timeout=%s max_output_tokens=%d search=%s",
+            "Gemini request diagnostics: model=%s fallback_model=%s active_model=%s language=%s question_chars=%d timeout=%s max_output_tokens=%d search=%s thinking_level=%s thinking_budget=%s",
             self.model,
+            self.fallback_model or "n/a",
+            active_model,
             language,
             len(question),
             self.timeout_seconds if self.timeout_seconds is not None else "n/a",
             _MAX_OUTPUT_TOKENS,
-            self.enable_google_search,
+            search_enabled_for_request,
+            self.thinking_level or "n/a",
+            self.thinking_budget,
         )
         started_at = time.perf_counter()
-        response = await self._generate_content(client, types, self.model, user_prompt, system_prompt, tools, _MAX_OUTPUT_TOKENS)
+        try:
+            response = await self._generate_content(
+                client,
+                types,
+                active_model,
+                user_prompt,
+                system_prompt,
+                tools,
+                _MAX_OUTPUT_TOKENS,
+                thinking_config,
+            )
+        except Exception as exc:
+            if not self._is_model_unavailable_error(exc) or active_model == self.fallback_model or not self.fallback_model:
+                raise
+            LOGGER.warning(
+                "Gemini primary model unavailable; retrying once with fallback model. primary_model=%s fallback_model=%s error_type=%s reason=%s",
+                self.model,
+                self.fallback_model,
+                type(exc).__name__,
+                str(exc).strip() or "<no error message>",
+            )
+            self._primary_model_unavailable = True
+            active_model = self.fallback_model
+            thinking_config = self._build_thinking_config(types, active_model)
+            response = await self._generate_content(
+                client,
+                types,
+                active_model,
+                user_prompt,
+                system_prompt,
+                tools,
+                _MAX_OUTPUT_TOKENS,
+                thinking_config,
+            )
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         content = getattr(response, "text", None)
         self._log_response_diagnostics(response, content)
         return self._finalize_first_response(response, content, elapsed_ms)
+
+    @classmethod
+    def _build_system_prompt(cls, language: LanguageCode, question: str) -> str:
+        """Build the system prompt, adding demo tone only for Greenwich questions."""
+
+        base_prompt = (
+            "You are a concise live voice assistant. Answer in exactly the requested language using general knowledge. "
+            "Use Google Search when current information is needed, such as weather, news, or recent events. "
+            "Produce a complete spoken answer in this first response. If a location is required and missing, ask for the city. "
+            "Answer naturally in 1-3 short sentences. For list requests, use up to 2 short bullets. "
+            "For poems, use at most 4 short lines."
+        )
+        if not cls._is_greenwich_context_question(question):
+            return base_prompt
+        if language == "vi":
+            return (
+                base_prompt
+                + " Khi câu hỏi nói về Greenwich Việt Nam, hãy trả lời như một chuyên viên tư vấn tuyển sinh có kinh nghiệm: "
+                "ấm áp, tự tin, thực tế và hướng đến nhu cầu của học sinh/phụ huynh. "
+                "Trả lời đúng trọng tâm câu hỏi trước. Với câu hỏi về lý do chọn, điểm khác biệt, độ phù hợp hoặc ngành yêu thích, "
+                "hãy mở đầu bằng giá trị thực tế cho người học như phong cách học, hỗ trợ sinh viên, dự án thực hành, môi trường học, định hướng nghề nghiệp hoặc mức độ phù hợp. "
+                "Không mở đầu bằng thông tin liên kết, bằng cấp hoặc chuẩn Anh Quốc trừ khi người dùng hỏi về danh tính, uy tín, bằng cấp hoặc đối tác. "
+                "Không bịa xếp hạng, cam kết việc làm, cam kết trúng tuyển, học bổng hoặc kết quả đầu ra. "
+                "Nếu cần nhắc tên, dùng đúng: Đại học Greenwich và Tổ chức Giáo dục FPT."
+            )
+        return (
+            base_prompt
+            + " When the question is about Greenwich Vietnam, answer like an experienced admissions advisor: "
+            "warm, confident, practical, and focused on student or parent needs. "
+            "Answer the user's specific concern first. For why, difference, suitability, or interest-based questions, "
+            "lead with practical student value such as learning style, student support, project work, campus experience, career orientation, or fit. "
+            "Do not lead with partnership, degree, or UK-standard facts unless the user asks about identity, credibility, degree, or partnership. "
+            "Do not invent rankings, guaranteed jobs, guaranteed admission, scholarships, or outcomes. "
+            "If needed, use the correct names: University of Greenwich and FPT Education."
+        )
+
+    @classmethod
+    def _build_user_prompt(cls, language: LanguageCode, question: str) -> str:
+        """Build the user prompt with a compact Greenwich fact note when relevant."""
+
+        language_name = "Vietnamese" if language == "vi" else "English"
+        prompt = f"Language: {language_name}\nQuestion: {question}"
+        if not cls._is_greenwich_context_question(question):
+            return prompt
+        if language == "vi":
+            return (
+                prompt
+                + "\nGreenwich fact guardrails, use only when directly relevant: Greenwich Việt Nam liên kết với Đại học Greenwich "
+                "và Tổ chức Giáo dục FPT; chương trình đào tạo theo chuẩn Anh Quốc tại Việt Nam."
+            )
+        return (
+            prompt
+            + "\nGreenwich fact guardrails, use only when directly relevant: Greenwich Vietnam is linked with the "
+            "University of Greenwich and FPT Education; it offers UK-standard study in Vietnam."
+        )
+
+    @classmethod
+    def _is_greenwich_context_question(cls, question: str) -> bool:
+        """Return whether a prompt clearly refers to Greenwich Vietnam."""
+
+        tokens = set(_TOKEN_RE.findall(cls._normalize_for_context(question)))
+        return "greenwich" in tokens or {"green", "which"} <= tokens
+
+    @classmethod
+    def _should_enable_search(cls, question: str) -> bool:
+        """Return whether the request likely needs current Google Search grounding."""
+
+        tokens = set(_TOKEN_RE.findall(cls._normalize_for_context(question)))
+        return bool(
+            tokens
+            & {
+                "current",
+                "gan",
+                "giao",
+                "hom",
+                "latest",
+                "match",
+                "news",
+                "score",
+                "sport",
+                "sports",
+                "thang",
+                "thong",
+                "tin",
+                "today",
+                "traffic",
+                "tran",
+                "weather",
+                "won",
+            }
+        )
+
+    def _build_thinking_config(self, types, model: str):
+        """Build model-family specific thinking controls when the SDK exposes them."""
+
+        thinking_config_cls = getattr(types, "ThinkingConfig", None)
+        if thinking_config_cls is None:
+            return None
+        normalized_model = model.lower()
+        if normalized_model.startswith("gemini-3"):
+            return thinking_config_cls(thinking_level=self.thinking_level or "minimal")
+        if normalized_model.startswith("gemini-2.5"):
+            return thinking_config_cls(thinking_budget=self.thinking_budget)
+        return None
+
+    @staticmethod
+    def _is_model_unavailable_error(exc: Exception) -> bool:
+        """Return whether an exception is a model availability/configuration failure."""
+
+        exc_type = type(exc).__name__.lower()
+        error_text = str(exc).lower()
+        return exc_type in {"notfound", "invalidargument", "failedprecondition"} or any(
+            marker in error_text
+            for marker in (
+                "model not found",
+                "not found",
+                "not supported",
+                "unsupported model",
+                "invalid model",
+                "permission denied",
+            )
+        )
+
+    @staticmethod
+    def _normalize_for_context(text: str) -> str:
+        """Normalize text for lightweight entity detection."""
+
+        lowered = text.lower().replace("Ä‘", "d")
+        ascii_like = unicodedata.normalize("NFD", lowered).encode("ascii", "ignore").decode("ascii")
+        return " ".join(_TOKEN_RE.findall(ascii_like))
 
     @classmethod
     def _finalize_first_response(cls, response, content: str | None, elapsed_ms: float) -> str:
@@ -110,18 +283,31 @@ class GeminiLLMProvider(LanguageModelProvider):
         return content.strip()
 
     @staticmethod
-    async def _generate_content(client, types, model: str, user_prompt: str, system_prompt: str, tools, max_output_tokens: int):
+    async def _generate_content(
+        client,
+        types,
+        model: str,
+        user_prompt: str,
+        system_prompt: str,
+        tools,
+        max_output_tokens: int,
+        thinking_config,
+    ):
         """Call Gemini with the requested token cap."""
 
+        config_kwargs = {
+            "system_instruction": system_prompt,
+            "temperature": 0.2,
+            "max_output_tokens": max_output_tokens,
+        }
+        if tools is not None:
+            config_kwargs["tools"] = tools
+        if thinking_config is not None:
+            config_kwargs["thinking_config"] = thinking_config
         return await client.aio.models.generate_content(
             model=model,
             contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.2,
-                max_output_tokens=max_output_tokens,
-                tools=tools,
-            ),
+            config=types.GenerateContentConfig(**config_kwargs),
         )
 
     @classmethod

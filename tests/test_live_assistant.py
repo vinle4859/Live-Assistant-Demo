@@ -196,6 +196,8 @@ def test_is_sleep_command_english() -> None:
 
     assert is_sleep_command("Please stop listening now", "en")
     assert is_sleep_command("Top listening.", "en")
+    assert is_command_like_sleep_phrase("bye")
+    assert is_command_like_sleep_phrase("goodbye")
 
 
 def test_command_like_sleep_phrase_blocks_stt_slips() -> None:
@@ -212,6 +214,8 @@ def test_is_sleep_command_vietnamese() -> None:
 
     assert is_sleep_command("Bạn có thể ngủ đi", "vi")
     assert is_sleep_command("Chào tạm biệt.", "vi")
+    assert is_sleep_command("Dừng nghe.", "vi")
+    assert is_command_like_sleep_phrase("thoát")
 
 
 def test_sleep_ack_text_localized_by_language() -> None:
@@ -434,7 +438,10 @@ def test_log_command_card_includes_wake_and_exit_phrases(caplog) -> None:
     )
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any("wake=\"hey lemon\"" in message and "stop listening" in message for message in messages)
+    assert any(
+        "wake=\"hey lemon\"" in message and "stop listening" in message and "tạm biệt" in message
+        for message in messages
+    )
 
 
 def test_wake_ack_mode_defaults_to_adaptive_for_invalid_values() -> None:
@@ -675,8 +682,8 @@ def test_request_cue_defaults_use_vietnamese_diacritics() -> None:
 
     config = LiveAssistantConfig(language="vi")
 
-    assert config.request_ready_first_text_vi == "Bạn hỏi đi."
-    assert "Bạn hỏi tiếp đi." in config.request_ready_texts_vi
+    assert config.request_ready_first_text_vi == "Bạn cứ hỏi nhé."
+    assert "Bạn hỏi tiếp nhé." in config.request_ready_texts_vi
     assert "Để tôi kiểm tra." in config.thinking_texts_vi
     assert not LiveVoiceAssistant._looks_like_romanized_vietnamese(config.request_ready_first_text_vi)
 

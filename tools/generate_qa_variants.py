@@ -322,8 +322,8 @@ def generate_variants_with_gemini(
     """Generate variants with Gemini in small batches and return id->variants map."""
 
     project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
-    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1").strip() or "us-central1"
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite").strip() or "gemini-3.1-flash-lite"
     if not project:
         return {}
 
