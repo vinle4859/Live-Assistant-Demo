@@ -7,6 +7,7 @@ This project is ready to hand off for live Docker deployment. The repo includes 
 - Process type: live microphone CLI assistant.
 - Live command: `python main.py --language adaptive`
 - Diagnostic command without microphone: `python main.py --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-language en`
+- Script validation without microphone: `python main.py --mode script --script-file event_script.txt --script-validate`
 - No HTTP server, API port, or health endpoint exists today.
 - Cloud providers remain required for STT, TTS, and Gemini.
 
@@ -19,6 +20,7 @@ This project is ready to hand off for live Docker deployment. The repo includes 
   - Vertex AI Gemini
 - A writable output directory.
 - Microphone and speaker access for live mode.
+- Speaker access for scripted mode; microphone, STT, DB routing, and LLM are not used in scripted mode.
 
 ## Docker Handoff
 
@@ -38,6 +40,7 @@ VOICE_LOOP_OUTPUT_DIR=/app/output
 VOICE_LOOP_QA_SEED_AUTO_SYNC=false
 VOICE_LOOP_STT_MODEL=
 VOICE_LOOP_STT_LOCATION=global
+VOICE_LOOP_DOMAIN_PROFILE=greenwich
 ```
 
 ## Deployment Package
@@ -50,6 +53,7 @@ Include:
 - `.env.example`
 - `.dockerignore`
 - deployment docs
+- `IMPLEMENTATION_NOTES.md`
 - `data/knowledge_base.sqlite3`
 
 Exclude:
@@ -95,9 +99,22 @@ Live validation on the deployment host:
 
 ## Logging
 
-The app writes logs to stdout and to `output/live_sessions/live_session_*.log`.
+The app writes logs to stdout and to `output/<mode>_sessions/<mode>_session_*.log`.
 
 Keep `VOICE_LOOP_LOG_LEVEL=INFO` for normal deployment. Use `DEBUG` only during short troubleshooting windows.
+
+## Scripted event mode
+
+Use scripted mode when the assistant only needs to speak planned lines.
+
+1. Validate the file:
+   `python main.py --mode script --script-file event_script.txt --script-validate`
+2. Pre-render all selected lines:
+   `python main.py --mode script --script-file event_script.txt --script-no-play`
+3. Rehearse controlled playback:
+   `python main.py --mode script --script-file event_script.txt --script-manual-next`
+
+Generated audio is written under `output/script_sessions/<timestamp>/` so the operator can inspect or replay the exact files used for the event.
 
 ## Google Cloud Auth
 

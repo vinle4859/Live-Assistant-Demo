@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .domain_profile import build_domain_profile
 from .transcript_cheats import TranscriptCheatRule
 from .types import LanguageCode
 
@@ -55,8 +56,11 @@ class AppConfig:
     stt_model: str = ""
     stt_location: str = "global"
     stt_hint_phrases: tuple[str, ...] = ()
+    domain_profile: str = "greenwich"
     transcript_cheats: tuple[TranscriptCheatRule, ...] = ()
     tts_provider: str = "google"
+    tts_voice_en: str = ""
+    tts_voice_vi: str = ""
     llm_timeout_seconds: float = 10.0
     llm_direct_min_query_tokens: int = 1
     llm_enable_google_search: bool = True
@@ -147,8 +151,13 @@ class AppConfig:
         """Build configuration from environment variables and CLI overrides."""
 
         wake_word = os.getenv("VOICE_LOOP_WAKE_WORD", "hey lemon")
+        domain_profile_name = os.getenv("VOICE_LOOP_DOMAIN_PROFILE", "greenwich")
+        domain_profile = build_domain_profile(domain_profile_name)
         configured_hints = _parse_phrase_list(os.getenv("VOICE_LOOP_STT_HINT_PHRASES"))
-        stt_hint_phrases = configured_hints or _default_stt_hint_phrases(wake_word)
+        stt_hint_phrases = _with_domain_profile_hints(
+            configured_hints or _default_stt_hint_phrases(wake_word),
+            domain_profile.stt_hint_phrases,
+        )
         configured_wake_aliases = _parse_phrase_list(os.getenv("VOICE_LOOP_WAKE_ALIASES"))
         wake_aliases = configured_wake_aliases or _derive_wake_aliases(wake_word, stt_hint_phrases)
         language_mode = _parse_language_mode(os.getenv("VOICE_LOOP_LANGUAGE_MODE"), "adaptive")
@@ -165,8 +174,11 @@ class AppConfig:
             stt_model=os.getenv("VOICE_LOOP_STT_MODEL", "").strip(),
             stt_location=os.getenv("VOICE_LOOP_STT_LOCATION", "global").strip() or "global",
             stt_hint_phrases=stt_hint_phrases,
+            domain_profile=domain_profile.name,
             transcript_cheats=_parse_transcript_cheats(os.getenv("VOICE_LOOP_TRANSCRIPT_CHEATS")),
             tts_provider=os.getenv("VOICE_LOOP_TTS_PROVIDER", "google").lower(),
+            tts_voice_en=os.getenv("VOICE_LOOP_TTS_VOICE_EN", "").strip(),
+            tts_voice_vi=os.getenv("VOICE_LOOP_TTS_VOICE_VI", "").strip(),
             llm_timeout_seconds=_parse_float(os.getenv("VOICE_LOOP_LLM_TIMEOUT_SECONDS"), 10.0),
             llm_direct_min_query_tokens=_parse_int(os.getenv("VOICE_LOOP_LLM_DIRECT_MIN_QUERY_TOKENS"), 1),
             llm_enable_google_search=_parse_bool(os.getenv("VOICE_LOOP_LLM_ENABLE_GOOGLE_SEARCH"), True),
@@ -305,6 +317,12 @@ def _default_stt_hint_phrases(wake_word: str) -> tuple[str, ...]:
     if len(wake_tokens) >= 2:
         hints.append(wake_tokens[-1])
     return tuple(dict.fromkeys(hints))
+
+
+def _with_domain_profile_hints(hints: tuple[str, ...], domain_hints: tuple[str, ...]) -> tuple[str, ...]:
+    """Add scoped domain hints that improve STT without rewriting transcripts."""
+
+    return tuple(dict.fromkeys([*hints, *domain_hints]))
 
 
 def _derive_wake_aliases(wake_word: str, stt_hint_phrases: tuple[str, ...]) -> tuple[str, ...]:

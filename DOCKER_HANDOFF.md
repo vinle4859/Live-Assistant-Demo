@@ -12,7 +12,7 @@ This project is a live microphone CLI assistant. It is not an HTTP service and d
   - `data/live_audio/`
 - Runtime logs:
   - stdout/stderr
-  - `output/live_sessions/live_session_*.log`
+  - `output/<mode>_sessions/<mode>_session_*.log`
 
 ## Image Contents
 
@@ -25,6 +25,7 @@ Include:
 - `requirements.txt`
 - `.env.example`
 - deployment docs
+- `IMPLEMENTATION_NOTES.md`
 - `data/knowledge_base.sqlite3`
 
 Exclude:
@@ -89,6 +90,7 @@ VOICE_LOOP_OUTPUT_DIR=/app/output
 VOICE_LOOP_QA_SEED_AUTO_SYNC=false
 VOICE_LOOP_STT_PROVIDER=google
 VOICE_LOOP_TTS_PROVIDER=google
+VOICE_LOOP_DOMAIN_PROFILE=greenwich
 VOICE_LOOP_STT_MODEL=
 VOICE_LOOP_STT_LOCATION=global
 GOOGLE_CLOUD_LOCATION=global
@@ -122,6 +124,15 @@ docker run --rm \
   -e GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/google-credentials.json \
   live-assistant-demo \
   python main.py --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-language en
+```
+
+Scripted event validation:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  live-assistant-demo \
+  python main.py --mode script --script-file event_script.txt --script-validate
 ```
 
 Live host validation:

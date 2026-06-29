@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import audioop
+import struct
 import wave
 from pathlib import Path
 
@@ -21,8 +21,22 @@ def read_wav_as_mono_pcm(audio_path: Path) -> tuple[bytes, int]:
     if channels == 1:
         return pcm_data, sample_rate
     if channels == 2:
-        return audioop.tomono(pcm_data, 2, 0.5, 0.5), sample_rate
+        return _stereo_16bit_pcm_to_mono(pcm_data), sample_rate
     raise ValueError("Only mono or stereo WAV files are supported")
+
+
+def _stereo_16bit_pcm_to_mono(pcm_data: bytes) -> bytes:
+    """Average little-endian stereo 16-bit PCM frames into mono frames."""
+
+    if len(pcm_data) % 4 != 0:
+        raise ValueError("Stereo 16-bit PCM data must contain complete frames")
+    mono_samples = bytearray(len(pcm_data) // 2)
+    output_offset = 0
+    for left, right in struct.iter_unpack("<hh", pcm_data):
+        mono_sample = int((left + right) / 2)
+        struct.pack_into("<h", mono_samples, output_offset, mono_sample)
+        output_offset += 2
+    return bytes(mono_samples)
 
 
 def iter_pcm_chunks(pcm_data: bytes, sample_rate: int, chunk_duration_ms: int = 600) -> list[bytes]:

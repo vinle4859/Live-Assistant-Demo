@@ -12,11 +12,11 @@ from .base import TextToSpeechProvider
 class EdgeTTSProvider(TextToSpeechProvider):
     """Render speech using Microsoft's online edge-tts service."""
 
-    def __init__(self, voice_en: str = "en-US-EmmaMultilingualNeural", voice_vi: str = "vi-VN-HoaiMyNeural") -> None:
+    def __init__(self, voice_en: str = "", voice_vi: str = "") -> None:
         """Store the fallback voice names used per language."""
 
-        self.voice_en = voice_en
-        self.voice_vi = voice_vi
+        self.voice_en = voice_en or "en-GB-SoniaNeural"
+        self.voice_vi = voice_vi or "vi-VN-HoaiMyNeural"
 
     async def synthesize(self, text: str, language: LanguageCode, output_path: Path) -> Path:
         """Generate audio using the async edge-tts client and validate the file."""

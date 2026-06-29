@@ -1,7 +1,7 @@
 # Deployment Checklist
 
 ## A. Repository Package
-- [ ] Include `main.py`, `voice_loop/`, `requirements.txt`, `.env.example`, `.dockerignore`, deployment docs, and `data/knowledge_base.sqlite3`.
+- [ ] Include `main.py`, `voice_loop/`, `requirements.txt`, `.env.example`, `.dockerignore`, deployment docs, `IMPLEMENTATION_NOTES.md`, and `data/knowledge_base.sqlite3`.
 - [ ] Exclude `.env`, `.venv/`, `output/`, `.pytest_cache/`, `__pycache__/`, `tests/`, `tools/`, runtime audio, credentials, and local scratch files from the Docker image.
 - [ ] Confirm `data/live_audio/` contains only `.gitkeep` before handoff.
 - [ ] Confirm no real Google credential files are present.
@@ -13,6 +13,7 @@
 - [ ] Set `VOICE_LOOP_OUTPUT_DIR=/app/output` for Docker.
 - [ ] Keep `VOICE_LOOP_QA_SEED_AUTO_SYNC=false`.
 - [ ] Set host-specific `VOICE_LOOP_INPUT_DEVICE_INDEX` and `VOICE_LOOP_SAMPLE_RATE`.
+- [ ] Set `VOICE_LOOP_DOMAIN_PROFILE=greenwich` for Greenwich events, or `none` for unrelated events.
 
 ## C. Docker Runtime
 - [ ] Install Python 3.12 runtime.
@@ -25,6 +26,9 @@
 ## D. Validation
 - [ ] Run `python -m pytest`.
 - [ ] Run `python main.py --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-language en`.
+- [ ] For scripted events, run `python main.py --mode script --script-file event_script.txt --script-validate`.
+- [ ] For scripted events, pre-render with `python main.py --mode script --script-file event_script.txt --script-no-play`.
+- [ ] For scripted events, rehearse playback with `python main.py --mode script --script-file event_script.txt --script-manual-next`.
 - [ ] Start live mode with `python main.py --language adaptive`.
 - [ ] Confirm startup mic calibration logs non-silent device health.
 - [ ] Complete one wake -> request -> response cycle.

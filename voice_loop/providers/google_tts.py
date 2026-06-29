@@ -12,10 +12,17 @@ from .base import TextToSpeechProvider
 class GoogleTextToSpeechProvider(TextToSpeechProvider):
     """Render speech audio using Google Cloud Text-to-Speech."""
 
-    def __init__(self, timeout_seconds: float = 3.0) -> None:
+    def __init__(
+        self,
+        timeout_seconds: float = 3.0,
+        voice_en: str = "",
+        voice_vi: str = "",
+    ) -> None:
         """Store the request timeout used for Google API calls."""
 
         self.timeout_seconds = timeout_seconds
+        self.voice_en = voice_en or "en-GB-Neural2-F"
+        self.voice_vi = voice_vi or "vi-VN-Neural2-A"
 
     async def synthesize(self, text: str, language: LanguageCode, output_path: Path) -> Path:
         """Generate audio in a worker thread and validate the resulting file."""
@@ -42,11 +49,13 @@ class GoogleTextToSpeechProvider(TextToSpeechProvider):
                 "Google ADC credentials are missing. Configure Application Default Credentials "
                 "before running speech synthesis, or switch to edge/demo TTS provider."
             ) from exc
-        voice_language = "en-US" if language == "en" else "vi-VN"
+        voice_name = self.voice_en if language == "en" else self.voice_vi
+        voice_language = _voice_language_code(voice_name, "en-GB" if language == "en" else "vi-VN")
         request = texttospeech.SynthesizeSpeechRequest(
             input=texttospeech.SynthesisInput(text=text),
             voice=texttospeech.VoiceSelectionParams(
                 language_code=voice_language,
+                name=voice_name,
                 ssml_gender=texttospeech.SsmlVoiceGender.FEMALE,
             ),
             audio_config=texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3),
@@ -56,3 +65,12 @@ class GoogleTextToSpeechProvider(TextToSpeechProvider):
         if not output_path.exists() or output_path.stat().st_size == 0:
             raise RuntimeError("Google TTS did not produce a valid audio file")
         return output_path
+
+
+def _voice_language_code(voice_name: str, default: str) -> str:
+    """Return the Google language code prefix for a concrete voice name."""
+
+    parts = [part for part in voice_name.split("-") if part]
+    if len(parts) >= 2:
+        return "-".join(parts[:2])
+    return default

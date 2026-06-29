@@ -39,8 +39,8 @@ def build_default_pipeline(config: AppConfig) -> VoicePipeline:
         knowledge_base.seed_demo_rows()
 
     stt_provider = _build_stt_provider(config)
-    primary_tts_provider = _build_tts_provider(config)
-    fallback_tts_provider = EdgeTTSProvider()
+    primary_tts_provider = build_tts_provider(config)
+    fallback_tts_provider = EdgeTTSProvider(voice_en=config.tts_voice_en, voice_vi=config.tts_voice_vi)
     llm_provider, fallback_llm_provider = _build_llm_providers(config)
 
     return VoicePipeline(
@@ -81,7 +81,7 @@ def _build_llm_providers(config: AppConfig):
             # In production wiring, skip heuristic secondary fallback to avoid question-echo responses
             # when cloud generation times out. Pipeline then uses the hard localized fallback phrase.
             return primary_provider, None
-    except Exception:
+    except (ImportError, RuntimeError, ValueError):
         return secondary_provider, None
     return secondary_provider, None
 
@@ -101,9 +101,15 @@ def _build_stt_provider(config: AppConfig):
     )
 
 
-def _build_tts_provider(config: AppConfig):
+def build_tts_provider(config: AppConfig):
     """Choose the TTS provider based on configuration."""
 
     if config.tts_provider == "demo":
         return DemoTextToSpeechProvider()
-    return GoogleTextToSpeechProvider(timeout_seconds=config.provider_timeout_seconds)
+    if config.tts_provider == "edge":
+        return EdgeTTSProvider(voice_en=config.tts_voice_en, voice_vi=config.tts_voice_vi)
+    return GoogleTextToSpeechProvider(
+        timeout_seconds=config.provider_timeout_seconds,
+        voice_en=config.tts_voice_en,
+        voice_vi=config.tts_voice_vi,
+    )
