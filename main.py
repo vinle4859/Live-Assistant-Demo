@@ -337,6 +337,8 @@ def _configure_stream_encoding(stream) -> None:
 def main() -> None:
     """Launch the CLI entry point."""
 
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
         asyncio.run(_run_async())
     except KeyboardInterrupt:
@@ -344,7 +346,5 @@ def main() -> None:
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"Runtime error: {exc}")
         raise SystemExit(1)
-
-
 if __name__ == "__main__":
     main()

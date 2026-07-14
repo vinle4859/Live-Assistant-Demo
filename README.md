@@ -25,7 +25,8 @@ Docker integration requirements:
 - Provide writable `VOICE_LOOP_OUTPUT_DIR` and `data/live_audio/`.
 
 See [DOCKER_HANDOFF.md](DOCKER_HANDOFF.md) and [DEPLOYMENT.md](DEPLOYMENT.md) for the full handoff contract.
-See [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) for the current mode design, tradeoffs, and next task list.
+See [implementation.md](implementation.md) for the current mode design, tradeoffs, and next task list.
+
 
 ## Windows runtime setup (required)
 
@@ -47,12 +48,15 @@ $env:VOICE_LOOP_LOG_LEVEL='DEBUG'; .\.venv\Scripts\python main.py --language ada
 ```
 
 Default architecture:
-- Google Cloud Speech-to-Text for STT
-- Q&A retrieval supports `lexical`, `vector` (semantic proxy), and `hybrid` confidence-gated local matching
-- Gemini-backed synthesis on Vertex AI when available, otherwise heuristic synthesis
-- Default response routing: `local_db -> direct_LLM -> hard fallback`
-- Default language policy: dual-input adaptive (VI/EN input per turn) with single-output replies
-- Google Cloud Text-to-Speech for output, with edge-tts as fallback
+- Google Cloud Speech-to-Text for STT, with boost factor raised to `20.0` for Greenwich context.
+- Q&A retrieval supports `lexical`, `vector` (semantic proxy), and `hybrid` confidence-gated local matching.
+- Gemini-backed synthesis on Vertex AI when available, otherwise heuristic synthesis.
+- Default response routing: `local_db -> direct_LLM -> hard fallback`.
+- Default language policy: dual-input adaptive (VI/EN input per turn) with single-output replies.
+- Google Cloud Text-to-Speech for output, with edge-tts as fallback.
+- Low-latency in-process playback: Direct ctypes WinMM MCI on Windows; native player check (`gst-play-1.0`, `mpg123`, etc.) on Linux (Raspberry Pi 4) to eliminate subprocess latency.
+- Dynamic VAD safety: Dyn-calibrated mic RMS/peak values are clamped at startup (max `120.0` RMS / `900.0` peak) to avoid VAD lockup in noisy rooms.
+
 
 Current response-source labels in logs:
 - `local_db`: local Q&A match score is at or above `VOICE_LOOP_QA_CONFIDENCE_LOW`.
@@ -75,24 +79,12 @@ Token guard (`VOICE_LOOP_LLM_DIRECT_MIN_QUERY_TOKENS`):
 python main.py --language adaptive
 ```
 
-Live wake-word mode remains the default runtime mode.
+Live wake-word mode is the default and only runtime mode.
 
 ```bash
 python main.py --language en
 python main.py --language vi
-python main.py --mode live --language adaptive
-python main.py --mode diagnose --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-language en
-python main.py --mode script --language en --script-text "Welcome to the event."
-python main.py --mode script --language en --script-file event_script.txt --script-validate
-python main.py --mode script --language en --script-file event_script.txt --script-manual-next
 ```
-
-Script mode is TTS-only. It does not use STT, wake-word detection, the Q&A database, or LLM generation.
-For multi-line event scripts, pass `--script-file path/to/script.txt`; empty lines are skipped.
-Script mode pre-renders selected lines into `output/script_sessions/<timestamp>/` before playback starts.
-By default script mode renders and plays each line. Use `--script-no-play` to render MP3 files only.
-Use `--script-start-at N` to resume from a line, `--script-delay-seconds N` to wait after each played line, and `--script-manual-next` to require Enter before each line is played.
-Use `--script-validate` before the event to confirm line count, selected language, TTS provider, voice overrides, and output folder without synthesizing audio.
 
 For Google STT/TTS, you must configure Application Default Credentials (ADC):
 
@@ -148,15 +140,12 @@ Useful environment variables:
 - `VOICE_LOOP_REQUEST_MAX_SESSION_SECONDS` - absolute safety ceiling in request mode before auto-return to wake mode
 - `VOICE_LOOP_SAMPLE_RATE` - microphone capture sample rate
 - `VOICE_LOOP_INPUT_DEVICE_INDEX` - optional PyAudio input device index override
-- `VOICE_LOOP_DOMAIN_PROFILE` - optional event/domain profile (`greenwich` or `none`) for scoped provider hints
 - `VOICE_LOOP_STT_PROVIDER` - `google`
 - `VOICE_LOOP_STT_MODEL` - optional Google STT model override (leave empty for auto)
 - `VOICE_LOOP_STT_LOCATION` - Google STT location for streaming recognizer path (use `global` by default)
 - `VOICE_LOOP_STT_HINT_PHRASES` - comma-separated STT phrase hints (for wake words, commands)
-- `VOICE_LOOP_TRANSCRIPT_CHEATS` - semicolon-separated transcript corrections, format: `wrong=correct|context1,context2` (context optional)
-- `VOICE_LOOP_TTS_PROVIDER` - primary TTS provider (`google`, `edge`, or `demo`); edge-tts is also used as internal fallback
-- `VOICE_LOOP_TTS_VOICE_EN` - optional provider-specific English TTS voice override
-- `VOICE_LOOP_TTS_VOICE_VI` - optional provider-specific Vietnamese TTS voice override
+- `VOICE_LOOP_TRANSCRIPT_CHEATS` - semicolon-separated transcript corrections, format: `wrong=correct|context1,context2^exclude1,exclude2` (context and exclude optional)
+- `VOICE_LOOP_TTS_PROVIDER` - primary TTS provider (`google` or `demo`); edge-tts is used as internal fallback
 - `VOICE_LOOP_LLM_DIRECT_MIN_QUERY_TOKENS` - minimum token count required before direct LLM fallback runs
 - `VOICE_LOOP_DEBUG_LLM_TEXT` - log raw/compacted LLM excerpts for diagnosis
 - `VOICE_LOOP_DEBUG_AUDIO_IO` - log detailed TTS/playback file diagnostics
@@ -227,30 +216,6 @@ Operator guide: see [`TRANSCRIPT_CHEATS.md`](TRANSCRIPT_CHEATS.md).
 When `VOICE_LOOP_ENABLE_STREAMING_STT=true`, live request turns use Google streaming STT endpointing so capture can end when speech ends instead of always waiting for the full utterance window.
 Live mode now writes a timestamped log automatically under `output/live_sessions/`, so `Tee-Object` is optional for manual test capture.
 For model-quality experiments, prefer changing `VOICE_LOOP_STT_MODEL` and `VOICE_LOOP_STT_LOCATION` over adding local audio denoise. Current default leaves `VOICE_LOOP_STT_MODEL=` empty, which uses the provider default `latest_short`.
-With `VOICE_LOOP_DOMAIN_PROFILE=greenwich`, default STT hints include scoped Greenwich forms (`Greenwich Vietnam`, `Greenwich Việt Nam`, `University of Greenwich`, `Đại học Greenwich`) to improve recognition without adding broader transcript rewrites. Set `VOICE_LOOP_DOMAIN_PROFILE=none` for non-Greenwich events.
-
-## Event rehearsal checklist
-
-Use the exact event laptop, microphone, speaker, room, and network.
-
-1. Run `python main.py --mode script --script-file event_script.txt --script-validate`.
-2. Run `python main.py --mode script --script-file event_script.txt --script-no-play` to pre-render and inspect generated MP3 files.
-3. Run `python main.py --mode script --script-file event_script.txt --script-manual-next` with the event speakers.
-4. Run `python main.py --mode diagnose --diagnose-transcript "What is Greenwich Vietnam?" --diagnose-language en`.
-5. Run `python main.py --mode live --language adaptive` and ask at least one English and one Vietnamese question.
-6. Check `output/live_sessions/` logs for transcript quality, source routing, and latency before the event starts.
-
-## Test
-
-Run the full suite with the repository pytest config:
-
-```powershell
-.\.venv\Scripts\python -m pytest
-```
-
-The config keeps pytest temp/cache output inside `.pytest_tmp/`, avoiding user-profile temp permissions in sandboxed Windows runs. Current baseline: `207 passed`.
-
-Python support note: this project targets CPython 3.12 today, and `audioop` has been removed from the codebase so WAV mono conversion is no longer blocked by Python 3.13's `audioop` removal.
 
 ### Live command phrases
 

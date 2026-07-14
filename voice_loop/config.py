@@ -325,6 +325,7 @@ def _with_domain_profile_hints(hints: tuple[str, ...], domain_hints: tuple[str, 
     return tuple(dict.fromkeys([*hints, *domain_hints]))
 
 
+
 def _derive_wake_aliases(wake_word: str, stt_hint_phrases: tuple[str, ...]) -> tuple[str, ...]:
     """Derive wake aliases from STT hint phrases when explicit aliases are not set."""
 
@@ -390,7 +391,7 @@ def _parse_transcript_cheats(value: str | None) -> tuple[TranscriptCheatRule, ..
     """Parse transcript correction pairs from environment.
 
     Format:
-    VOICE_LOOP_TRANSCRIPT_CHEATS=wrong phrase=correct phrase|context1,context2;other wrong=other correct
+    VOICE_LOOP_TRANSCRIPT_CHEATS=wrong phrase=correct phrase|context1,context2^exclude1,exclude2;other wrong=other correct
     """
 
     if value is None or not value.strip():
@@ -409,12 +410,15 @@ def _parse_transcript_cheats(value: str | None) -> tuple[TranscriptCheatRule, ..
         normalized_correct = corrected_text.strip()
         if not normalized_wrong or not normalized_correct:
             continue
-        context_terms = _parse_phrase_list(context_part) if context_part.strip() else ()
+        required_part, _, excluded_part = context_part.partition("^")
+        context_terms = _parse_phrase_list(required_part) if required_part.strip() else ()
+        excluded_terms = _parse_phrase_list(excluded_part) if excluded_part.strip() else ()
         parsed_pairs.append(
             TranscriptCheatRule(
                 wrong_phrase=normalized_wrong,
                 corrected_phrase=normalized_correct,
                 required_context_terms=context_terms,
+                excluded_context_terms=excluded_terms,
             )
         )
 

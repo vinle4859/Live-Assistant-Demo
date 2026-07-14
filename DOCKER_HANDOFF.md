@@ -25,8 +25,9 @@ Include:
 - `requirements.txt`
 - `.env.example`
 - deployment docs
-- `IMPLEMENTATION_NOTES.md`
+- `implementation.md`
 - `data/knowledge_base.sqlite3`
+
 
 Exclude:
 - `.env`

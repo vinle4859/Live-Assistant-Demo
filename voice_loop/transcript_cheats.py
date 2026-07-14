@@ -18,11 +18,14 @@ class TranscriptCheatRule:
         corrected_phrase: Phrase to use when the rule applies.
         required_context_terms: Optional context terms. At least one must appear
             in the transcript before this correction is applied.
+        excluded_context_terms: Optional exclusion terms. If any of these appear
+            in the transcript, this correction is not applied.
     """
 
     wrong_phrase: str
     corrected_phrase: str
     required_context_terms: tuple[str, ...] = ()
+    excluded_context_terms: tuple[str, ...] = ()
 
 
 def normalize_text(text: str) -> str:
@@ -44,6 +47,9 @@ def apply_transcript_cheats(transcript: str, rules: tuple[TranscriptCheatRule, .
             continue
         if rule.required_context_terms and not _has_required_context(corrected, rule.required_context_terms):
             continue
+        if rule.excluded_context_terms and _has_required_context(corrected, rule.excluded_context_terms):
+            continue
+
 
         corrected, did_replace = _replace_phrase_whole_words(
             corrected,
