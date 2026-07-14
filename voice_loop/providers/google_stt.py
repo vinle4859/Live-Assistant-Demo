@@ -160,7 +160,7 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
             config_kwargs["model"] = self.model
         if self.hint_phrases:
             config_kwargs["speech_contexts"] = [
-                speech.SpeechContext(phrases=list(self.hint_phrases), boost=15.0)
+                speech.SpeechContext(phrases=list(self.hint_phrases), boost=20.0)
             ]
         config = speech.RecognitionConfig(
             **config_kwargs,
@@ -226,7 +226,7 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
         language_codes = self._build_language_codes(language)
         model_name = self.model or "latest_short"
         phrase_entries = [
-            cloud_speech.PhraseSet.Phrase(value=phrase, boost=15.0)
+            cloud_speech.PhraseSet.Phrase(value=phrase, boost=20.0)
             for phrase in self.hint_phrases
             if phrase.strip()
         ]

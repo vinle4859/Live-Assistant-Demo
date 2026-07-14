@@ -38,3 +38,16 @@ tmp_*.py
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Ideas and planning documents
+Plans.md
+to-do.md
+*ideas*
+*draft*
+implementation.md
+TRANSCRIPT_CHEATS.md
+
+# Ensure we do not ignore useful markdown files
+!README.md
+
+

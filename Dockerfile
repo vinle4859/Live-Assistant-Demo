@@ -30,7 +30,7 @@ COPY main.py .
 COPY voice_loop/ ./voice_loop/
 COPY data/knowledge_base.sqlite3 ./data/knowledge_base.sqlite3
 COPY .env.example .
-COPY README.md DEPLOYMENT.md DEPLOYMENT_CHECKLIST.md DOCKER_HANDOFF.md TRANSCRIPT_CHEATS.md Plans.md ./
+COPY README.md DEPLOYMENT.md DEPLOYMENT_CHECKLIST.md DOCKER_HANDOFF.md TRANSCRIPT_CHEATS.md implementation.md ./
 
 RUN mkdir -p /app/output /app/data/live_audio \
     && useradd --create-home --shell /usr/sbin/nologin appuser \

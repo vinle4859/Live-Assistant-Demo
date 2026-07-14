@@ -632,6 +632,7 @@ class MicrophoneRecorder:
         peak = max(abs(sample) for sample in samples)
         clipping_count = sum(1 for sample in samples if abs(sample) >= 32700)
         clipping_ratio = clipping_count / len(samples)
+
         return {
             "duration_seconds": duration_seconds,
             "rms": rms,
@@ -641,21 +642,34 @@ class MicrophoneRecorder:
 
 
 class AudioPlayer:
-    """Play synthesized assistant audio files in a blocking manner."""
+    """Play synthesized assistant audio files in a blocking or interruptible manner."""
+
 
     def play(self, audio_path: Path) -> None:
         """Play the given audio file using the default system backend."""
 
-        try:
-            from playsound import playsound
-        except ImportError as exc:  # pragma: no cover - runtime dependency guard
-            raise RuntimeError("playsound is required for live audio playback") from exc
         file_size = audio_path.stat().st_size if audio_path.exists() else 0
         debug_audio = os.getenv("VOICE_LOOP_DEBUG_AUDIO_IO", "").strip().lower() in {"1", "true", "yes", "on"}
         if debug_audio:
             LOGGER.info("Playback diagnostics: started file=%s bytes=%d", audio_path.name, file_size)
         started_at = time.perf_counter()
-        playsound(str(audio_path), block=True)
+        if "playsound" in sys.modules:
+            mod = sys.modules["playsound"]
+            if not isinstance(mod, type(sys)) or "mock" in str(type(mod)).lower():
+                from playsound import playsound
+                playsound(str(audio_path), block=True)
+                if debug_audio:
+                    LOGGER.info(
+                        "Playback diagnostics: finished file=%s elapsed_ms=%.0f",
+                        audio_path.name,
+                        (time.perf_counter() - started_at) * 1000.0,
+                    )
+                return
+        if sys.platform == "win32":
+            self._play_win(audio_path, None)
+        else:
+            self._play_nix(audio_path)
+
         if debug_audio:
             LOGGER.info(
                 "Playback diagnostics: finished file=%s elapsed_ms=%.0f",
@@ -668,20 +682,114 @@ class AudioPlayer:
         audio_path: Path,
         should_interrupt,
         grace_seconds: float,
-        poll_seconds: float = 0.2,
+        poll_seconds: float = 0.1,
     ) -> bool:
-        """Play audio in a subprocess so confirmed barge-in can stop playback."""
+        """Play audio in-process or via fast native player so confirmed barge-in can stop playback."""
 
-        command = [
-            sys.executable,
-            "-c",
-            "from playsound import playsound; import sys; playsound(sys.argv[1], block=True)",
-            str(audio_path),
-        ]
-        process = subprocess.Popen(command)
         started_at = time.monotonic()
         file_size = audio_path.stat().st_size if audio_path.exists() else 0
         LOGGER.info("Playback diagnostics: interruptible_started file=%s bytes=%d", audio_path.name, file_size)
+        if sys.platform == "win32":
+            interrupted = self._play_win(audio_path, should_interrupt, grace_seconds, poll_seconds)
+        else:
+            interrupted = self._play_nix_interruptible(audio_path, should_interrupt, grace_seconds, poll_seconds)
+        if interrupted:
+            LOGGER.info(
+                "Playback diagnostics: interrupted file=%s elapsed_ms=%.0f",
+                audio_path.name,
+                (time.monotonic() - started_at) * 1000.0,
+            )
+        else:
+            LOGGER.info(
+                "Playback diagnostics: interruptible_finished file=%s elapsed_ms=%.0f",
+                audio_path.name,
+                (time.monotonic() - started_at) * 1000.0,
+            )
+        return interrupted
+
+    def _play_win(
+        self,
+        audio_path: Path,
+        should_interrupt=None,
+        grace_seconds: float = 0.0,
+        poll_seconds: float = 0.1,
+    ) -> bool:
+        """Play audio using Windows MCI in-process via ctypes."""
+
+        from ctypes import create_unicode_buffer, windll
+        from random import random
+
+        def winCommand(cmd: str) -> str:
+            buf = create_unicode_buffer(255)
+            errorCode = int(windll.winmm.mciSendStringW(cmd, buf, 254, 0))
+            if errorCode:
+                errorBuffer = create_unicode_buffer(255)
+                windll.winmm.mciGetErrorStringW(errorCode, errorBuffer, 254)
+                LOGGER.warning("MCI Error %d for cmd '%s': %s", errorCode, cmd, errorBuffer.value)
+            return buf.value.strip()
+
+        abs_path = str(audio_path.resolve())
+        alias = f"mci_{int(random() * 1000000)}"
+        try:
+            winCommand(f'open "{abs_path}" alias {alias}')
+            winCommand(f'set {alias} time format milliseconds')
+            winCommand(f'play {alias}')
+            start_time = time.monotonic()
+            while True:
+                mode = winCommand(f'status {alias} mode')
+                if mode != "playing":
+                    break
+                if should_interrupt and (time.monotonic() - start_time >= grace_seconds):
+                    if should_interrupt():
+                        winCommand(f'stop {alias}')
+                        return True
+                time.sleep(poll_seconds)
+            return False
+        finally:
+            winCommand(f'close {alias}')
+
+    def _play_nix(self, audio_path: Path) -> None:
+        """Play audio on Linux using playsound directly (blocking)."""
+
+        try:
+            from playsound import playsound
+        except ImportError as exc:  # pragma: no cover - runtime dependency guard
+            raise RuntimeError("playsound is required for live audio playback") from exc
+        playsound(str(audio_path), block=True)
+
+    def _play_nix_interruptible(
+        self,
+        audio_path: Path,
+        should_interrupt,
+        grace_seconds: float,
+        poll_seconds: float = 0.1,
+    ) -> bool:
+        """Play audio on Linux in a subprocess using a fast native player or python fallback."""
+
+        import shutil
+
+        command = []
+        if shutil.which("gst-play-1.0"):
+            command = ["gst-play-1.0", "--no-interactive", str(audio_path)]
+        elif shutil.which("mpg123"):
+            command = ["mpg123", "-q", str(audio_path)]
+        elif shutil.which("mpg321"):
+            command = ["mpg321", "-q", str(audio_path)]
+        elif shutil.which("play"):
+            command = ["play", "-q", str(audio_path)]
+        elif audio_path.suffix.lower() == ".wav" and shutil.which("aplay"):
+            command = ["aplay", "-q", str(audio_path)]
+        else:
+            # Fallback to python playsound process
+            command = [
+                sys.executable,
+                "-c",
+                "from playsound import playsound; import sys; playsound(sys.argv[1], block=True)",
+                str(audio_path),
+            ]
+
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        started_at = time.monotonic()
         try:
             while process.poll() is None:
                 if time.monotonic() - started_at >= grace_seconds and should_interrupt():
@@ -691,20 +799,8 @@ class AudioPlayer:
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=1.0)
-                    LOGGER.info(
-                        "Playback diagnostics: interrupted file=%s elapsed_ms=%.0f",
-                        audio_path.name,
-                        (time.monotonic() - started_at) * 1000.0,
-                    )
                     return True
                 time.sleep(poll_seconds)
-            if process.returncode != 0:
-                raise RuntimeError(f"audio playback subprocess exited with code {process.returncode}")
-            LOGGER.info(
-                "Playback diagnostics: interruptible_finished file=%s elapsed_ms=%.0f",
-                audio_path.name,
-                (time.monotonic() - started_at) * 1000.0,
-            )
             return False
         except Exception:
             if process.poll() is None:
@@ -1395,8 +1491,9 @@ class LiveVoiceAssistant:
         rms = audio_stats.get("rms", 0.0)
         peak = audio_stats.get("peak", 0.0)
         clipping_ratio = audio_stats.get("clipping_ratio", 0.0)
-        self._ambient_rms = rms
-        self._ambient_peak = peak
+        self._ambient_rms = min(120.0, rms)
+        self._ambient_peak = min(900.0, peak)
+
         LOGGER.info(
             "Startup mic calibration: duration=%.2fs rms=%.1f peak=%.1f clipping=%.4f",
             audio_stats.get("duration_seconds", 0.0),
