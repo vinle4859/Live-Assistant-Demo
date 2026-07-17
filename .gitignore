@@ -37,6 +37,7 @@ tmp_*.py
 temp_pytest/
 temp_pytest_*/
 temp_pytest*
+cloudflared.exe
 # OS/editor noise
 .DS_Store
 Thumbs.db
