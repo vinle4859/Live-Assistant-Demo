@@ -1033,7 +1033,8 @@ class VoicePipeline:
 
         is_strong_phrase = db_match.whole_phrase_match and db_match.matched_keyword_token_count >= 2
         if not is_strong_phrase:
-            if db_match.query_coverage < 0.20:
+            required_coverage = 0.35 if not db_match.whole_phrase_match else 0.20
+            if db_match.query_coverage < required_coverage:
                 self._log_rejected_local_db_match(db_match, query, "low_query_coverage")
                 return _LocalDbRoutingDecision("reject_to_llm", "low_query_coverage")
 
