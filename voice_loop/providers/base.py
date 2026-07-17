@@ -74,6 +74,14 @@ class LanguageModelProvider(ABC):
     ) -> str:
         """Synthesize the final response text from the question."""
 
+    @abstractmethod
+    async def generate_answer_stream(
+        self,
+        language: LanguageCode,
+        question: str,
+    ):
+        """Synthesize the response text as a stream of chunks."""
+
 
 class TextToSpeechProvider(ABC):
     """Convert response text into a playable audio file."""

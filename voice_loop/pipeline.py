@@ -288,6 +288,234 @@ class VoicePipeline:
             "audio_output_path": str(output_path),
         }
 
+    async def process_transcription_stream(
+        self,
+        transcription: str,
+        language: LanguageCode,
+        stt_elapsed_ms: float | None = None,
+        language_confidence: float | None = None,
+        language_reason: str | None = None,
+    ):
+        """Resolve transcript and yield output audio paths as they are synthesized chunk-by-chunk."""
+
+        started_at = time.perf_counter()
+        self.knowledge_base.ensure_schema()
+        transcription = transcription.strip()
+        transcription, applied_cheats = apply_transcript_cheats(transcription, self.transcript_cheats)
+        if applied_cheats:
+            LOGGER.info("Transcript cheats applied (%s): %s", ", ".join(applied_cheats), transcription)
+        transcription, guarded_corrections = self._correct_guarded_greenwich_misrecognitions(transcription)
+        if guarded_corrections:
+            LOGGER.info("Guarded Greenwich corrections applied (%s): %s", ", ".join(guarded_corrections), transcription)
+        transcription, context_corrections = self._apply_greenwich_llm_context(transcription)
+        if context_corrections:
+            LOGGER.info("Greenwich LLM context applied (%s): %s", ", ".join(context_corrections), transcription)
+        self._advance_context_anchor()
+        clarification_text = self._clarification_phrase_for_query(transcription, language)
+        if clarification_text:
+            db_match = None
+            routed_query = transcription
+            used_context_link = False
+        else:
+            db_match, routed_query, used_context_link = self._lookup_response_with_context(
+                transcription,
+                language,
+                language_confidence=language_confidence,
+                language_reason=language_reason,
+            )
+
+        routed_query_token_count = self._query_token_count(routed_query)
+        local_db_decision = (
+            self._decide_local_db_routing(db_match, routed_query, language_confidence, language_reason)
+            if db_match
+            else _LocalDbRoutingDecision("reject_to_llm")
+        )
+
+        if clarification_text:
+            output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+            await self._render_audio_with_fallback(clarification_text, language, output_path)
+            yield {
+                "detected_language": language,
+                "transcription": transcription,
+                "resolved_source": "fallback",
+                "response_text": clarification_text,
+                "audio_output_path": str(output_path),
+                "is_final_segment": True,
+            }
+            return
+        elif local_db_decision.action == "reprompt_noisy":
+            phrase = self._repeat_request_phrase(language)
+            output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+            await self._render_audio_with_fallback(phrase, language, output_path)
+            yield {
+                "detected_language": language,
+                "transcription": transcription,
+                "resolved_source": "fallback",
+                "response_text": phrase,
+                "audio_output_path": str(output_path),
+                "is_final_segment": True,
+            }
+            return
+        elif db_match and local_db_decision.action == "accept_local_db":
+            response_text = self._compact_local_db_response(db_match.response, routed_query, db_match, language)
+            self._update_context_anchor(db_match)
+            pre_rendered_audio_path = None
+            if getattr(db_match, "audio_path", None):
+                candidate_path = Path(db_match.audio_path)
+                if candidate_path.is_file():
+                    pre_rendered_audio_path = candidate_path
+                else:
+                    db_relative = Path(self.knowledge_base.db_path).parent / candidate_path
+                    if db_relative.is_file():
+                        pre_rendered_audio_path = db_relative
+            if pre_rendered_audio_path is not None:
+                output_path = pre_rendered_audio_path
+            else:
+                output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+                await self._render_audio_with_fallback(response_text, language, output_path)
+            yield {
+                "detected_language": language,
+                "transcription": transcription,
+                "resolved_source": "local_db",
+                "response_text": response_text,
+                "audio_output_path": str(output_path),
+                "is_final_segment": True,
+            }
+            return
+
+        if self._should_skip_direct_llm_for_noisy_query(routed_query, language_confidence, language_reason):
+            phrase = self._repeat_request_phrase(language)
+            output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+            await self._render_audio_with_fallback(phrase, language, output_path)
+            yield {
+                "detected_language": language,
+                "transcription": transcription,
+                "resolved_source": "fallback",
+                "response_text": phrase,
+                "audio_output_path": str(output_path),
+                "is_final_segment": True,
+            }
+            return
+
+        if routed_query_token_count < max(1, self.llm_direct_min_query_tokens):
+            phrase = self._fallback_phrase(language)
+            output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+            await self._render_audio_with_fallback(phrase, language, output_path)
+            yield {
+                "detected_language": language,
+                "transcription": transcription,
+                "resolved_source": "fallback",
+                "response_text": phrase,
+                "audio_output_path": str(output_path),
+                "is_final_segment": True,
+            }
+            return
+
+        text_generator = self.llm_provider.generate_answer_stream(language, routed_query)
+        buffer = ""
+        sentence_index = 0
+        noise_reprompt_detected = False
+        pending_segment = None
+
+        async for chunk in text_generator:
+            buffer += chunk
+            sentences = self._split_spoken_sentences(buffer)
+            if not sentences:
+                continue
+
+            last_complete = bool(re.search(r"[.!?]\s*$", sentences[-1]))
+            if last_complete:
+                target_sentences = sentences
+                buffer = ""
+            else:
+                target_sentences = sentences[:-1]
+                buffer = sentences[-1]
+
+            for sentence in target_sentences:
+                sentence_text = sentence.strip()
+                if not sentence_text:
+                    continue
+
+                if sentence_index == 0 and "[NOISE_REPROMPT]" in sentence_text:
+                    noise_reprompt_detected = True
+                    break
+
+                if sentence_index >= 2:
+                    break
+
+                sentence_index += 1
+                cleaned_sentence = self._compact_direct_llm_response(sentence_text, routed_query)
+                if not cleaned_sentence:
+                    continue
+
+                output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+                await self._render_audio_with_fallback(cleaned_sentence, language, output_path)
+
+                if pending_segment:
+                    yield {**pending_segment, "is_final_segment": False}
+
+                pending_segment = {
+                    "detected_language": language,
+                    "transcription": transcription,
+                    "resolved_source": "llm_direct",
+                    "response_text": cleaned_sentence,
+                    "audio_output_path": str(output_path),
+                }
+
+            if noise_reprompt_detected or sentence_index >= 2:
+                break
+
+        if not noise_reprompt_detected and sentence_index < 2 and buffer.strip():
+            sentence_text = buffer.strip()
+            if sentence_index == 0 and "[NOISE_REPROMPT]" in sentence_text:
+                noise_reprompt_detected = True
+            else:
+                cleaned_sentence = self._compact_direct_llm_response(sentence_text, routed_query)
+                if cleaned_sentence:
+                    sentence_index += 1
+                    output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+                    await self._render_audio_with_fallback(cleaned_sentence, language, output_path)
+
+                    if pending_segment:
+                        yield {**pending_segment, "is_final_segment": False}
+
+                    pending_segment = {
+                        "detected_language": language,
+                        "transcription": transcription,
+                        "resolved_source": "llm_direct",
+                        "response_text": cleaned_sentence,
+                        "audio_output_path": str(output_path),
+                    }
+
+        if noise_reprompt_detected:
+            phrase = self._noise_reprompt_phrase(language)
+            output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+            await self._render_audio_with_fallback(phrase, language, output_path)
+            yield {
+                "detected_language": language,
+                "transcription": transcription,
+                "resolved_source": "fallback",
+                "response_text": phrase,
+                "audio_output_path": str(output_path),
+                "is_final_segment": True,
+            }
+            return
+
+        if pending_segment:
+            yield {**pending_segment, "is_final_segment": True}
+        else:
+            phrase = self._fallback_phrase(language)
+            output_path = self.output_dir / f"response_stream_{uuid4().hex}.mp3"
+            await self._render_audio_with_fallback(phrase, language, output_path)
+            yield {
+                "detected_language": language,
+                "transcription": transcription,
+                "resolved_source": "fallback",
+                "response_text": phrase,
+                "audio_output_path": str(output_path),
+                "is_final_segment": True,
+            }
+
     def _compact_local_db_response(
         self,
         response_text: str,

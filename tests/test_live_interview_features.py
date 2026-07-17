@@ -170,3 +170,93 @@ def test_noise_reprompt_interception(tmp_path: Path) -> None:
     # Should fall back and use a noise reprompt phrase
     assert result["resolved_source"] == "fallback"
     assert "reprompt" in result["response_text"].lower() or "repeat" in result["response_text"].lower() or "say that again" in result["response_text"].lower()
+
+
+def test_process_transcription_stream_local_db(tmp_path) -> None:
+    """Stream process should yield a single final segment for local DB matches."""
+    kb_path = tmp_path / "kb.sqlite"
+    kb = KnowledgeBase(kb_path)
+    kb.ensure_schema()
+    conn = sqlite3.connect(kb_path)
+    conn.execute(
+        "INSERT INTO knowledge_base (source_id, language, question, response, keywords, audio_path) VALUES (?, ?, ?, ?, ?, ?)",
+        ("test-001", "en", "What is the tuition?", "The tuition is 100 USD.", "tuition", str(tmp_path / "test.mp3"))
+    )
+    conn.commit()
+    conn.close()
+
+    # Write dummy audio
+    (tmp_path / "test.mp3").write_bytes(b"dummy")
+
+    pipeline = VoicePipeline(
+        knowledge_base=kb,
+        stt_provider=FakeSTTProvider(),
+        llm_provider=FakeLLMProvider(),
+        fallback_llm_provider=None,
+        primary_tts_provider=FakeTTSProvider(),
+        fallback_tts_provider=None,
+        output_dir=tmp_path,
+        timeout_seconds=3.0,
+    )
+
+    async def run_stream():
+        segments = []
+        async for segment in pipeline.process_transcription_stream("what is the tuition", "en"):
+            segments.append(segment)
+        return segments
+
+    segments = asyncio.run(run_stream())
+    assert len(segments) == 1
+    assert segments[0]["resolved_source"] == "local_db"
+    assert segments[0]["is_final_segment"] is True
+    assert segments[0]["response_text"] == "The tuition is 100 USD."
+
+
+def test_process_transcription_stream_llm(tmp_path) -> None:
+    """Stream process should partition LLM response stream into sentences."""
+    kb_path = tmp_path / "kb.sqlite"
+    kb = KnowledgeBase(kb_path)
+    kb.ensure_schema()
+
+    class StreamingLLMProvider(FakeLLMProvider):
+        async def generate_answer_stream(self, language, question):
+            yield "This is sentence one. "
+            yield "This is sentence two. "
+            yield "This is sentence three."
+
+    pipeline = VoicePipeline(
+        knowledge_base=kb,
+        stt_provider=FakeSTTProvider(),
+        llm_provider=StreamingLLMProvider(),
+        fallback_llm_provider=None,
+        primary_tts_provider=FakeTTSProvider(),
+        fallback_tts_provider=None,
+        output_dir=tmp_path,
+        timeout_seconds=3.0,
+    )
+
+    async def run_stream(query):
+        segments = []
+        async for segment in pipeline.process_transcription_stream(query, "en"):
+            segments.append(segment)
+        return segments
+
+    # Verifies sentence partition and limit to max 2 sentences
+    segments = asyncio.run(run_stream("what is the capital of france"))
+    assert len(segments) == 2
+    assert segments[0]["response_text"] == "This is sentence one."
+    assert segments[0]["is_final_segment"] is False
+    assert segments[1]["response_text"] == "This is sentence two."
+    assert segments[1]["is_final_segment"] is True
+
+    # Verifies sentinel interception
+    class NoiseStreamingLLMProvider(FakeLLMProvider):
+        async def generate_answer_stream(self, language, question):
+            yield "[NOISE_REPROMPT] background chat"
+
+    pipeline.llm_provider = NoiseStreamingLLMProvider()
+    segments = asyncio.run(run_stream("some background crowd chat"))
+    assert len(segments) == 1
+    assert segments[0]["resolved_source"] == "fallback"
+    assert "reprompt" in segments[0]["response_text"].lower() or "repeat" in segments[0]["response_text"].lower() or "say that again" in segments[0]["response_text"].lower()
+

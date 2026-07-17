@@ -24,6 +24,10 @@ class HeuristicLLMProvider(LanguageModelProvider):
 
         return await asyncio.to_thread(self._generate_sync, language, question)
 
+    async def generate_answer_stream(self, language: LanguageCode, question: str):
+        """Synthesize a short answer stream from the user question."""
+        yield self._generate_sync(language, question)
+
     def _generate_sync(self, language: LanguageCode, question: str) -> str:
         """Assemble a language-appropriate answer from the question."""
 
@@ -132,6 +136,74 @@ class GeminiLLMProvider(LanguageModelProvider):
         content = getattr(response, "text", None)
         self._log_response_diagnostics(response, content)
         return self._finalize_first_response(response, content, elapsed_ms)
+
+    async def generate_answer_stream(self, language: LanguageCode, question: str):
+        """Call the Gemini API asynchronously and yield generated text chunks in real-time."""
+
+        if not self.project:
+            raise RuntimeError("GOOGLE_CLOUD_PROJECT is not configured")
+
+        try:
+            from google import genai
+            from google.genai import types
+        except ImportError as exc:  # pragma: no cover - runtime dependency guard
+            raise RuntimeError("google-genai is not installed") from exc
+
+        if self._client is None:
+            self._client = genai.Client(vertexai=True, project=self.project, location=self.location)
+        client = self._client
+        system_prompt = self._build_system_prompt(language, question)
+        user_prompt = self._build_user_prompt(language, question)
+        search_enabled_for_request = self.enable_google_search and self._should_enable_search(question)
+        tools = [types.Tool(googleSearch=types.GoogleSearch())] if search_enabled_for_request else None
+        active_model = self.fallback_model if self._primary_model_unavailable and self.fallback_model else self.model
+        thinking_config = self._build_thinking_config(types, active_model)
+        LOGGER.info(
+            "Gemini stream request diagnostics: model=%s active_model=%s language=%s search=%s",
+            self.model,
+            active_model,
+            language,
+            search_enabled_for_request,
+        )
+        try:
+            config_kwargs = {
+                "system_instruction": system_prompt,
+                "temperature": 0.2,
+                "max_output_tokens": _MAX_OUTPUT_TOKENS,
+            }
+            if tools is not None:
+                config_kwargs["tools"] = tools
+            if thinking_config is not None:
+                config_kwargs["thinking_config"] = thinking_config
+
+            async for response in await client.aio.models.generate_content_stream(
+                model=active_model,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(**config_kwargs),
+            ):
+                content = getattr(response, "text", None)
+                if content:
+                    yield content
+        except Exception as exc:
+            if not self._is_model_unavailable_error(exc) or active_model == self.fallback_model or not self.fallback_model:
+                raise
+            LOGGER.warning(
+                "Gemini primary model stream unavailable; retrying with fallback model %s.",
+                self.fallback_model,
+            )
+            self._primary_model_unavailable = True
+            active_model = self.fallback_model
+            thinking_config = self._build_thinking_config(types, active_model)
+            config_kwargs["thinking_config"] = thinking_config
+
+            async for response in await client.aio.models.generate_content_stream(
+                model=active_model,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(**config_kwargs),
+            ):
+                content = getattr(response, "text", None)
+                if content:
+                    yield content
 
     @classmethod
     def _build_system_prompt(cls, language: LanguageCode, question: str) -> str:

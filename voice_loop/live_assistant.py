@@ -1231,16 +1231,12 @@ class LiveVoiceAssistant:
                 continue
 
             try:
-                result = await self.pipeline.process_transcription_with_metrics(
+                stream_generator = self.pipeline.process_transcription_stream(
                     transcript,
                     output_language,
                     stt_elapsed_ms=stt_elapsed_ms,
                     language_confidence=language_confidence,
                     language_reason=language_reason.split("+", 1)[0],
-                    thinking_cue_delay_seconds=(
-                        self.config.thinking_cue_delay_seconds if self.config.thinking_cue_enabled else 0.0
-                    ),
-                    thinking_cue_callback=lambda: self._play_thinking_cue(output_language),
                 )
             except RuntimeError:
                 LOGGER.exception("Pipeline processing failed due to runtime configuration error.")
@@ -1249,12 +1245,47 @@ class LiveVoiceAssistant:
                 LOGGER.exception("Pipeline processing failed unexpectedly; listening for the next request.")
                 continue
 
-            response_text = result["response_text"].strip()
-            audio_output_path = Path(result["audio_output_path"])
-            LOGGER.info('Assistant response (turn %d): "%s"', turn, response_text)
-            keep_running = await self._play_answer_and_cleanup(audio_output_path)
-            if not keep_running:
-                return
+            thinking_cue_task = None
+            if self.config.thinking_cue_enabled:
+                async def play_cue_after_delay():
+                    await asyncio.sleep(self.config.thinking_cue_delay_seconds)
+                    await self._play_thinking_cue(output_language)
+                thinking_cue_task = asyncio.create_task(play_cue_after_delay())
+
+            try:
+                iterator = stream_generator.__aiter__()
+                segment = await iterator.__anext__()
+                if thinking_cue_task:
+                    thinking_cue_task.cancel()
+            except StopAsyncIteration:
+                if thinking_cue_task:
+                    thinking_cue_task.cancel()
+                continue
+            except Exception:
+                if thinking_cue_task:
+                    thinking_cue_task.cancel()
+                LOGGER.exception("Error receiving first streaming segment.")
+                continue
+
+            while True:
+                response_text = segment["response_text"].strip()
+                audio_output_path = Path(segment["audio_output_path"])
+                LOGGER.info('Assistant response segment (turn %d): "%s"', turn, response_text)
+                keep_running, interrupted = await self._play_answer_and_cleanup(audio_output_path)
+                if not keep_running:
+                    return
+                if interrupted:
+                    break
+                if segment["is_final_segment"]:
+                    break
+                try:
+                    segment = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                except Exception:
+                    LOGGER.exception("Error receiving subsequent streaming segment.")
+                    break
+
             if self.config.request_post_tts_guard_seconds > 0:
                 await asyncio.sleep(self.config.request_post_tts_guard_seconds)
             mark_request_activity()
@@ -1393,10 +1424,15 @@ class LiveVoiceAssistant:
         finally:
             status_path.unlink(missing_ok=True)
 
-    async def _play_answer_and_cleanup(self, audio_output_path: Path) -> bool:
-        """Play one answer clip and delete the generated MP3 to avoid persistent output artifacts."""
+    async def _play_answer_and_cleanup(self, audio_output_path: Path) -> tuple[bool, bool]:
+        """Play one answer clip and delete the generated MP3 to avoid persistent output artifacts.
+
+        Returns:
+            A tuple of (keep_running, interrupted).
+        """
 
         is_pre_rendered = "qa_pre_rendered" in audio_output_path.parts
+        interrupted = False
         try:
             if self._barge_in_enabled():
                 interrupted = await asyncio.to_thread(
@@ -1411,14 +1447,14 @@ class LiveVoiceAssistant:
                 await asyncio.to_thread(self.player.play, audio_output_path)
         except RuntimeError:
             LOGGER.exception("Audio playback failed due to runtime configuration error.")
-            return False
+            return False, False
         except Exception:
             LOGGER.exception("Audio playback failed unexpectedly; keeping conversation loop alive.")
-            return True
+            return True, False
         finally:
             if not is_pre_rendered:
                 audio_output_path.unlink(missing_ok=True)
-        return True
+        return True, interrupted
 
     def _cleanup_stale_runtime_audio(self) -> None:
         """Remove stale runtime audio from interrupted prior sessions."""

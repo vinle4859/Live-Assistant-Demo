@@ -575,7 +575,7 @@ def test_play_answer_and_cleanup_deletes_audio_file_on_runtime_error(tmp_path) -
     audio_file = tmp_path / "answer_runtime_error.mp3"
     audio_file.write_bytes(b"fake")
 
-    keep_running = asyncio.run(assistant._play_answer_and_cleanup(audio_file))
+    keep_running, interrupted = asyncio.run(assistant._play_answer_and_cleanup(audio_file))
 
     assert not keep_running
     assert not audio_file.exists()
@@ -593,7 +593,7 @@ def test_play_answer_and_cleanup_deletes_audio_file_on_generic_error(tmp_path) -
     audio_file = tmp_path / "answer_generic_error.mp3"
     audio_file.write_bytes(b"fake")
 
-    keep_running = asyncio.run(assistant._play_answer_and_cleanup(audio_file))
+    keep_running, interrupted = asyncio.run(assistant._play_answer_and_cleanup(audio_file))
 
     assert keep_running
     assert not audio_file.exists()
@@ -617,7 +617,6 @@ def test_should_speak_reprompt_once_in_adaptive_mode() -> None:
 
 
 def test_should_not_reprompt_when_adaptive_speaks_immediately() -> None:
-    """Adaptive mode with immediate wake speech should not reprompt again."""
 
     assistant = LiveVoiceAssistant(
         pipeline=object(),
