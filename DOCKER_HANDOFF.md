@@ -24,7 +24,6 @@ Include:
 - `voice_loop/`
 - `requirements.txt`
 - `.env.example`
-- deployment docs
 - `implementation.md`
 - `data/knowledge_base.sqlite3`
 

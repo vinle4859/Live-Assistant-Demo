@@ -150,6 +150,7 @@ class VoicePipeline:
         routed_query_token_count = self._query_token_count(routed_query)
         llm_status = "not_needed"
         llm_failure_type: str | None = None
+        pre_rendered_audio_path: Path | None = None
 
         if db_match is not None:
             db_score = db_match.score
@@ -177,6 +178,14 @@ class VoicePipeline:
             response_text = self._compact_local_db_response(db_match.response, routed_query, db_match, language)
             resolved_source = "local_db"
             self._update_context_anchor(db_match)
+            if getattr(db_match, "audio_path", None):
+                candidate_path = Path(db_match.audio_path)
+                if candidate_path.is_file():
+                    pre_rendered_audio_path = candidate_path
+                else:
+                    db_relative = Path(self.knowledge_base.db_path).parent / candidate_path
+                    if db_relative.is_file():
+                        pre_rendered_audio_path = db_relative
         else:
             if self._should_skip_direct_llm_for_noisy_query(routed_query, language_confidence, language_reason):
                 response_text = self._repeat_request_phrase(language)
@@ -191,12 +200,20 @@ class VoicePipeline:
                     thinking_cue_delay_seconds,
                     thinking_cue_callback,
                 )
-                response_text = self._compact_direct_llm_response(llm_result.answer, routed_query) if llm_result.answer else ""
-                llm_status = llm_result.status
-                llm_failure_type = llm_result.failure_type
-                llm_elapsed_ms = (time.perf_counter() - llm_started_at) * 1000.0
-                resolved_source = "llm_direct" if response_text else "fallback"
-                if response_text and self._is_greenwich_context_query(routed_query):
+                raw_answer = llm_result.answer or ""
+                if "[NOISE_REPROMPT]" in raw_answer:
+                    response_text = self._noise_reprompt_phrase(language)
+                    llm_status = "noise_detected"
+                    llm_failure_type = "noise_reprompt"
+                    llm_elapsed_ms = (time.perf_counter() - llm_started_at) * 1000.0
+                    resolved_source = "fallback"
+                else:
+                    response_text = self._compact_direct_llm_response(raw_answer, routed_query) if raw_answer else ""
+                    llm_status = llm_result.status
+                    llm_failure_type = llm_result.failure_type
+                    llm_elapsed_ms = (time.perf_counter() - llm_started_at) * 1000.0
+                    resolved_source = "llm_direct" if response_text else "fallback"
+                if response_text and self._is_greenwich_context_query(routed_query) and llm_status != "noise_detected":
                     self._update_greenwich_llm_context()
                 if not response_text:
                     if self._should_repeat_after_failed_direct_llm(
@@ -214,10 +231,15 @@ class VoicePipeline:
                 resolved_source = "fallback"
                 llm_status = "skipped_token_guard"
 
-        output_path = self.output_dir / f"response_{uuid4().hex}.mp3"
-        tts_started_at = time.perf_counter()
-        await self._render_audio_with_fallback(response_text, language, output_path)
-        tts_elapsed_ms = (time.perf_counter() - tts_started_at) * 1000.0
+        if pre_rendered_audio_path is not None:
+            output_path = pre_rendered_audio_path
+            tts_elapsed_ms = 0.0
+            LOGGER.info("Using pre-rendered cached audio from database: %s", output_path)
+        else:
+            output_path = self.output_dir / f"response_{uuid4().hex}.mp3"
+            tts_started_at = time.perf_counter()
+            await self._render_audio_with_fallback(response_text, language, output_path)
+            tts_elapsed_ms = (time.perf_counter() - tts_started_at) * 1000.0
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         if stt_elapsed_ms is not None:
             stt_label = f"{stt_elapsed_ms:.0f}"
@@ -372,7 +394,10 @@ class VoicePipeline:
         without_urls = re.sub(r"https?://\S+", "", protected)
         fixed_spacing = re.sub(r"(?<=[.!?])(?=[^\s])", " ", without_urls)
         without_markdown_bullets = re.sub(r"(^|\s)[*\u2022-]\s+", r"\1", fixed_spacing)
-        flattened = re.sub(r"[\r\n]+", " ", without_markdown_bullets)
+        without_bold = re.sub(r"\*\*|__", "", without_markdown_bullets)
+        without_italic = re.sub(r"\*|_", "", without_bold)
+        without_headers = re.sub(r"#+\s+", "", without_italic)
+        flattened = re.sub(r"[\r\n]+", " ", without_headers)
         flattened = re.sub(r"\s+", " ", flattened).strip(" -")
         return flattened.replace("<DECIMAL_DOT>", ".").replace("<DOT>", ".")
 
@@ -777,6 +802,12 @@ class VoicePipeline:
 
         if db_match.whole_phrase_match and db_match.matched_keyword_token_count >= 2:
             return _LocalDbRoutingDecision("accept_local_db", "whole_phrase")
+
+        is_strong_phrase = db_match.whole_phrase_match and db_match.matched_keyword_token_count >= 2
+        if not is_strong_phrase:
+            if db_match.query_coverage < 0.20:
+                self._log_rejected_local_db_match(db_match, query, "low_query_coverage")
+                return _LocalDbRoutingDecision("reject_to_llm", "low_query_coverage")
 
         if db_match.fuzzy_hit_count > db_match.exact_hit_count:
             self._log_rejected_local_db_match(db_match, query, "mostly_fuzzy_evidence")
@@ -1408,6 +1439,9 @@ class VoicePipeline:
 
         flattened = re.sub(r"[\r\n]+", " ", text)
         flattened = re.sub(r"(^|\s)[*\u2022-]\s+", r"\1", flattened)
+        flattened = re.sub(r"\*\*|__", "", flattened)
+        flattened = re.sub(r"\*|_", "", flattened)
+        flattened = re.sub(r"#+\s+", "", flattened)
         flattened = re.sub(r"\s+", " ", flattened).strip()
         return flattened or text
 
@@ -1445,3 +1479,20 @@ class VoicePipeline:
         """Return a short prompt when the transcript is too noisy to answer."""
 
         return "Tôi nghe chưa rõ, bạn nói lại câu hỏi được không?" if language == "vi" else "I may have misheard that. Please repeat the question."
+
+    @staticmethod
+    def _noise_reprompt_phrase(language: LanguageCode) -> str:
+        """Return a random noise reprompt phrase in the given language."""
+        import random
+        en_phrases = [
+            "I couldn't hear your question clearly. Could you please repeat?",
+            "It is a bit noisy here. Please say that again.",
+            "I didn't catch that. Could you repeat your question?"
+        ]
+        vi_phrases = [
+            "Tôi nghe chưa rõ do tiếng ồn. Bạn nói lại giúp tôi nhé.",
+            "Không gian hơi ồn, bạn có thể lặp lại câu hỏi được không?",
+            "Tôi chưa nghe rõ câu hỏi. Bạn vui lòng lặp lại nhé."
+        ]
+        phrases = vi_phrases if language == "vi" else en_phrases
+        return random.choice(phrases)

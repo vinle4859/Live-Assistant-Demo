@@ -34,6 +34,7 @@ data/web_faq_qa_vi.json
 # Temporary/debug scratch files
 .tmp_*.html
 tmp_*.py
+temp_pytest/
 
 # OS/editor noise
 .DS_Store
@@ -46,7 +47,7 @@ to-do.md
 *draft*
 implementation.md
 TRANSCRIPT_CHEATS.md
-
+DOCKER_HANDOFF.md
 # Ensure we do not ignore useful markdown files
 !README.md
 

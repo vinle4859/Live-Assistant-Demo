@@ -45,6 +45,7 @@ class KnowledgeMatch:
     query_coverage: float = 0.0
     score_margin: float = 0.0
     whole_phrase_match: bool = False
+    audio_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,7 @@ class KnowledgeBase:
             "source_id TEXT",
             "section TEXT",
             "question TEXT",
+            "audio_path TEXT",
         )
         for column_definition in optional_columns:
             column_name = column_definition.split()[0].lower()
@@ -258,7 +260,7 @@ class KnowledgeBase:
         with closing(sqlite3.connect(self.db_path)) as connection:
             cursor = connection.execute(
                 """
-                SELECT keywords, response, source_id, section, question
+                SELECT keywords, response, source_id, section, question, audio_path
                 FROM knowledge_base
                 WHERE source_id = ? AND language = ?
                 LIMIT 1
@@ -268,7 +270,7 @@ class KnowledgeBase:
             row = cursor.fetchone()
             if row is None:
                 return None
-            keywords, response, stored_source_id, section, question = row
+            keywords, response, stored_source_id, section, question, audio_path = row
             return KnowledgeMatch(
                 response=str(response),
                 score=1.0,
@@ -285,6 +287,7 @@ class KnowledgeBase:
                 query_coverage=1.0,
                 score_margin=1.0,
                 whole_phrase_match=True,
+                audio_path=str(audio_path).strip() if audio_path is not None else None,
             )
 
     def lookup_response(self, query: str, language: LanguageCode) -> str | None:
@@ -313,13 +316,13 @@ class KnowledgeBase:
         with closing(sqlite3.connect(self.db_path)) as connection:
             cursor = connection.execute(
                 """
-                SELECT language, keywords, response, source_id, section, question
+                SELECT language, keywords, response, source_id, section, question, audio_path
                 FROM knowledge_base
                 WHERE language = ?
                 """,
                 (language,),
             )
-            for language_value, keywords, response, source_id, section, question in cursor.fetchall():
+            for language_value, keywords, response, source_id, section, question, audio_path in cursor.fetchall():
                 lexical_evidence = self._score_match(
                     query_token_list,
                     normalized_query,
@@ -343,6 +346,7 @@ class KnowledgeBase:
                         "source_id": str(source_id).strip() if source_id is not None else None,
                         "section": str(section).strip() if section is not None else None,
                         "question": str(question).strip() if question is not None else None,
+                        "audio_path": str(audio_path).strip() if audio_path is not None else None,
                     }
                 )
 
@@ -425,6 +429,7 @@ class KnowledgeBase:
             query_coverage=evidence.query_coverage,
             score_margin=score_margin,
             whole_phrase_match=evidence.whole_phrase_match,
+            audio_path=selected.get("audio_path") if isinstance(selected.get("audio_path"), str) else None,
         )
 
     @staticmethod

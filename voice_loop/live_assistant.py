@@ -903,6 +903,9 @@ class LiveVoiceAssistant:
             await self._acknowledge_wake()
             LOGGER.info("Wake word detected. Start speaking your request.")
             await self._conversation_loop()
+            self._cleanup_stale_runtime_audio()
+            import gc
+            gc.collect()
             LOGGER.info("Returning to wake-word listening mode.")
 
     async def _wait_for_wake_word(self, wake_phrases: tuple[str, ...]) -> None:
@@ -1393,6 +1396,7 @@ class LiveVoiceAssistant:
     async def _play_answer_and_cleanup(self, audio_output_path: Path) -> bool:
         """Play one answer clip and delete the generated MP3 to avoid persistent output artifacts."""
 
+        is_pre_rendered = "qa_pre_rendered" in audio_output_path.parts
         try:
             if self._barge_in_enabled():
                 interrupted = await asyncio.to_thread(
@@ -1412,7 +1416,8 @@ class LiveVoiceAssistant:
             LOGGER.exception("Audio playback failed unexpectedly; keeping conversation loop alive.")
             return True
         finally:
-            audio_output_path.unlink(missing_ok=True)
+            if not is_pre_rendered:
+                audio_output_path.unlink(missing_ok=True)
         return True
 
     def _cleanup_stale_runtime_audio(self) -> None:
@@ -1435,13 +1440,15 @@ class LiveVoiceAssistant:
                 continue
             for pattern in patterns:
                 for audio_path in directory.glob(pattern):
+                    if "cached" in audio_path.name:
+                        continue
                     try:
                         audio_path.unlink()
                         removed_count += 1
                     except OSError:
                         LOGGER.debug("Unable to remove stale runtime audio: %s", audio_path)
         if removed_count:
-            LOGGER.info("Removed %d stale runtime audio files from previous sessions.", removed_count)
+            LOGGER.info("Removed %d stale runtime audio files.", removed_count)
 
     def _log_command_card(self, device_info: dict[str, object], wake_phrases: tuple[str, ...]) -> None:
         """Log the operator-facing commands and live-mode state."""

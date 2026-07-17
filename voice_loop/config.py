@@ -116,7 +116,7 @@ class AppConfig:
     enable_streaming_stt: bool = True
     streaming_chunk_duration_ms: int = 100
     streaming_speech_start_timeout_seconds: float = 8.0
-    streaming_speech_end_timeout_seconds: float = 1.8
+    streaming_speech_end_timeout_seconds: float = 2.2
     streaming_local_speech_end_ms: int = 2000
     streaming_max_active_seconds: float = 10.0
     streaming_no_progress_seconds: float = 4.5
