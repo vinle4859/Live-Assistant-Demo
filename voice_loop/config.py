@@ -139,6 +139,11 @@ class AppConfig:
     input_device_index: int | None = None
     debug_audio_io: bool = False
     debug_stt_stream: bool = False
+    web_port: int = 8000
+    web_bind_address: str = "0.0.0.0"
+    ambient_greetings: tuple[str, ...] = ()
+    ambient_interval_seconds: float = 300.0
+    ambient_enabled: bool = True
 
     @classmethod
     def from_env(
@@ -164,6 +169,22 @@ class AppConfig:
         output_language_mode = _parse_output_language_mode(os.getenv("VOICE_LOOP_OUTPUT_LANGUAGE_MODE"), "auto")
         output_language_fixed = _parse_language_code(os.getenv("VOICE_LOOP_OUTPUT_LANGUAGE_FIXED"), language)
         qa_confidence_low = _parse_probability(os.getenv("VOICE_LOOP_QA_CONFIDENCE_LOW"), 0.55)
+
+        web_port = int(os.getenv("VOICE_LOOP_WEB_PORT", "8000"))
+        web_bind_address = os.getenv("VOICE_LOOP_WEB_BIND_ADDRESS", "0.0.0.0").strip()
+
+        default_ambient = (
+            "Hello, I am Lemon! Stand close and say 'Hey Lemon' to ask a question.",
+            "Xin chào, tôi là Lemon! Hãy đứng gần và nói 'Hey Lemon' để đặt câu hỏi."
+        )
+        ambient_str = os.getenv("VOICE_LOOP_AMBIENT_GREETINGS")
+        if ambient_str:
+            ambient_greetings = tuple(p.strip() for p in ambient_str.split(";") if p.strip())
+        else:
+            ambient_greetings = default_ambient
+
+        ambient_interval_seconds = float(os.getenv("VOICE_LOOP_AMBIENT_INTERVAL_SECONDS", "300.0"))
+        ambient_enabled = os.getenv("VOICE_LOOP_AMBIENT_ENABLED", "true").lower() == "true"
 
         return cls(
             language=language,
@@ -303,6 +324,11 @@ class AppConfig:
             input_device_index=_parse_optional_int(os.getenv("VOICE_LOOP_INPUT_DEVICE_INDEX")),
             debug_audio_io=_parse_bool(os.getenv("VOICE_LOOP_DEBUG_AUDIO_IO"), False),
             debug_stt_stream=_parse_bool(os.getenv("VOICE_LOOP_DEBUG_STT_STREAM"), False),
+            web_port=web_port,
+            web_bind_address=web_bind_address,
+            ambient_greetings=ambient_greetings,
+            ambient_interval_seconds=ambient_interval_seconds,
+            ambient_enabled=ambient_enabled,
         )
 
 

@@ -45,3 +45,17 @@ def iter_pcm_chunks(pcm_data: bytes, sample_rate: int, chunk_duration_ms: int = 
     bytes_per_second = sample_rate * 2
     chunk_size = max(1, int(bytes_per_second * (chunk_duration_ms / 1000.0)))
     return [pcm_data[index : index + chunk_size] for index in range(0, len(pcm_data), chunk_size)]
+
+
+def scale_pcm16_volume(pcm_data: bytes, gain: float) -> bytes:
+    """Scale 16-bit signed PCM samples by a gain factor, clamping to signed 16-bit limits."""
+
+    if gain == 1.0 or not pcm_data:
+        return pcm_data
+    import array
+    samples = array.array("h")
+    samples.frombytes(pcm_data)
+    for i in range(len(samples)):
+        val = int(samples[i] * gain)
+        samples[i] = max(-32768, min(32767, val))
+    return samples.tobytes()

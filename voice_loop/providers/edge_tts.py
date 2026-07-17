@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from ..lang_detect import detect_language
 from ..types import LanguageCode
 from .base import TextToSpeechProvider
 
@@ -26,8 +27,9 @@ class EdgeTTSProvider(TextToSpeechProvider):
         except ImportError as exc:  # pragma: no cover - runtime dependency guard
             raise RuntimeError("edge-tts is not installed") from exc
 
+        resolved_language: LanguageCode = detect_language(text)  # type: ignore[assignment]
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        voice = self.voice_en if language == "en" else self.voice_vi
+        voice = self.voice_en if resolved_language == "en" else self.voice_vi
         communicate = edge_tts.Communicate(text=text, voice=voice)
         await communicate.save(str(output_path))
         if not output_path.exists() or output_path.stat().st_size == 0:

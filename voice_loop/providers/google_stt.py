@@ -15,7 +15,7 @@ import unicodedata
 from collections import deque
 from pathlib import Path
 
-from ..audio import read_wav_as_mono_pcm
+from ..audio import read_wav_as_mono_pcm, scale_pcm16_volume
 from ..types import LanguageCode
 from .base import SpeechToTextProvider
 
@@ -62,6 +62,8 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
         chunk_duration_ms: int,
         wake_phrases: tuple[str, ...],
         max_stream_seconds: float = 45.0,
+        mic_gain: float = 1.0,
+        should_interrupt: Callable[[], bool] | None = None,
     ) -> dict[str, str]:
         """Listen continuously until a wake phrase appears in interim or final STT."""
 
@@ -73,6 +75,8 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
             chunk_duration_ms,
             wake_phrases,
             max_stream_seconds,
+            mic_gain,
+            should_interrupt,
         )
 
     async def transcribe_live_utterance(
@@ -94,6 +98,7 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
         no_progress_seconds: float = 4.5,
         weak_progress_seconds: float = 6.0,
         weak_progress_min_tokens: int = 3,
+        mic_gain: float = 1.0,
     ) -> str:
         """Stream microphone audio to Google STT until endpointing signals utterance end."""
 
@@ -116,6 +121,7 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
             no_progress_seconds,
             weak_progress_seconds,
             weak_progress_min_tokens,
+            mic_gain,
         )
 
     async def transcribe(self, audio_path: Path, language: LanguageCode) -> str:
@@ -188,6 +194,7 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
         no_progress_seconds: float = 4.5,
         weak_progress_seconds: float = 6.0,
         weak_progress_min_tokens: int = 3,
+        mic_gain: float = 1.0,
     ) -> str:
         """Use STT v2 streaming + voice activity endpointing to transcribe one utterance."""
 
@@ -344,6 +351,8 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
                     chunk = stream.read(chunk_frames, exception_on_overflow=False)
                     if not chunk:
                         continue
+                    if mic_gain != 1.0:
+                        chunk = scale_pcm16_volume(chunk, mic_gain)
                     chunk_stats = self._pcm_stats(chunk)
                     if speech_started:
                         is_speech = self._is_tail_speech_chunk(
@@ -528,6 +537,8 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
         chunk_duration_ms: int,
         wake_phrases: tuple[str, ...],
         max_stream_seconds: float = 45.0,
+        mic_gain: float = 1.0,
+        should_interrupt: Callable[[], bool] | None = None,
     ) -> dict[str, str]:
         """Use Google v2 streaming recognition for continuous wake detection."""
 
@@ -631,10 +642,14 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
         def capture_worker() -> None:
             try:
                 while not stop_capture.is_set():
+                    if should_interrupt and should_interrupt():
+                        break
                     if time.monotonic() - started_at >= safe_max_stream_seconds:
                         break
                     chunk = stream.read(chunk_frames, exception_on_overflow=False)
                     if chunk:
+                        if mic_gain != 1.0:
+                            chunk = scale_pcm16_volume(chunk, mic_gain)
                         self._put_audio_chunk(audio_queue, chunk)
             finally:
                 try:
@@ -648,6 +663,8 @@ class GoogleSpeechToTextProvider(SpeechToTextProvider):
         def request_iterator():
             yield initial_request
             while not stop_capture.is_set():
+                if should_interrupt and should_interrupt():
+                    break
                 try:
                     item = audio_queue.get(timeout=0.3)
                 except queue.Empty:

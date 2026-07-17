@@ -44,6 +44,7 @@ class SpeechToTextProvider(ABC):
         no_progress_seconds: float = 4.5,
         weak_progress_seconds: float = 6.0,
         weak_progress_min_tokens: int = 3,
+        mic_gain: float = 1.0,
     ) -> str:
         """Transcribe one live utterance from microphone audio using provider endpointing."""
 
@@ -57,6 +58,8 @@ class SpeechToTextProvider(ABC):
         chunk_duration_ms: int,
         wake_phrases: tuple[str, ...],
         max_stream_seconds: float = 45.0,
+        mic_gain: float = 1.0,
+        should_interrupt: Callable[[], bool] | None = None,
     ) -> dict[str, str]:
         """Continuously listen for a wake phrase and return match diagnostics."""
 

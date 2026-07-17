@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from ..lang_detect import detect_language
 from ..types import LanguageCode
 from .base import TextToSpeechProvider
 
@@ -18,8 +19,6 @@ class GoogleTextToSpeechProvider(TextToSpeechProvider):
         voice_en: str = "",
         voice_vi: str = "",
     ) -> None:
-        """Store the request timeout used for Google API calls."""
-
         self.timeout_seconds = timeout_seconds
         self.voice_en = voice_en or "en-GB-Neural2-F"
         self.voice_vi = voice_vi or "vi-VN-Neural2-A"
@@ -27,7 +26,9 @@ class GoogleTextToSpeechProvider(TextToSpeechProvider):
     async def synthesize(self, text: str, language: LanguageCode, output_path: Path) -> Path:
         """Generate audio in a worker thread and validate the resulting file."""
 
-        return await asyncio.to_thread(self._synthesize_sync, text, language, output_path)
+        # Auto-detect overrides the caller — text content is the ground truth for voice selection.
+        resolved_language: LanguageCode = detect_language(text)  # type: ignore[assignment]
+        return await asyncio.to_thread(self._synthesize_sync, text, resolved_language, output_path)
 
     def _synthesize_sync(self, text: str, language: LanguageCode, output_path: Path) -> Path:
         """Call the Google TTS client and write an MP3 file to disk."""

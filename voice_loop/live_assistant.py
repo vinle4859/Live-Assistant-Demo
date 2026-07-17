@@ -18,6 +18,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from uuid import uuid4
 
+from .audio import scale_pcm16_volume
 from .pipeline import VoicePipeline
 from .types import LanguageCode
 
@@ -97,6 +98,14 @@ class LiveAssistantConfig:
     temp_audio_dir: Path = Path("data/live_audio")
     debug_audio_io: bool = False
     debug_stt_stream: bool = False
+    web_port: int = 8000
+    web_bind_address: str = "0.0.0.0"
+    ambient_greetings: tuple[str, ...] = (
+        "Hello, I am Lemon! Stand close and say 'Hey Lemon' to ask a question.",
+        "Xin chào, tôi là Lemon! Hãy đứng gần và nói 'Hey Lemon' để đặt câu hỏi."
+    )
+    ambient_interval_seconds: float = 300.0
+    ambient_enabled: bool = True
 
 
 def normalize_text(text: str) -> str:
@@ -221,6 +230,10 @@ def is_command_like_sleep_phrase(transcript: str) -> bool:
     """Return whether a transcript is close enough to an exit command to avoid LLM routing."""
 
     normalized_transcript = normalize_text(transcript)
+    for term in ("lemon", "leman", "le minh", "hey", "hello"):
+        normalized_transcript = normalized_transcript.replace(term, "")
+    normalized_transcript = " ".join(normalized_transcript.split()).strip()
+
     tokens = normalized_transcript.split()
     if not tokens:
         return False
@@ -534,7 +547,7 @@ class MicrophoneRecorder:
         self.input_device_index = input_device_index
         self.temp_audio_dir.mkdir(parents=True, exist_ok=True)
 
-    def capture_wav(self, duration_seconds: float, sample_rate: int, prefix: str) -> Path:
+    def capture_wav(self, duration_seconds: float, sample_rate: int, prefix: str, mic_gain: float = 1.0) -> Path:
         """Capture mono microphone audio and save it as 16-bit PCM WAV."""
 
         try:
@@ -558,7 +571,10 @@ class MicrophoneRecorder:
         stream = audio.open(**stream_kwargs)
         try:
             for _ in range(total_chunks):
-                frames.append(stream.read(chunk_size, exception_on_overflow=False))
+                chunk = stream.read(chunk_size, exception_on_overflow=False)
+                if mic_gain != 1.0:
+                    chunk = scale_pcm16_volume(chunk, mic_gain)
+                frames.append(chunk)
         finally:
             stream.stop_stream()
             stream.close()
@@ -842,6 +858,23 @@ class LiveVoiceAssistant:
         if hasattr(self.pipeline, "output_dir"):
             self.pipeline.output_dir = self.config.temp_audio_dir
 
+        self.current_mode = "live"
+        self._mode_changed_event = asyncio.Event()
+        self._audio_interrupt_event = asyncio.Event()
+        self.mic_gain = 1.0
+        self.ambient_phrases = config.ambient_greetings
+        self.ambient_interval_seconds = config.ambient_interval_seconds
+        self.ambient_enabled = config.ambient_enabled
+        self.next_ambient_time = 0.0
+        self.script_lines = []
+        self.script_audio_paths = {}
+        self.script_index = 0
+        self.script_autoplay = False
+        self.loop = None
+        self.web_server = None
+        self._ambient_audio_paths = {}
+        self._ambient_queue_index = 0
+
     async def run(self) -> None:
         """Run the assistant forever: wake listening followed by conversation turns."""
 
@@ -897,19 +930,378 @@ class LiveVoiceAssistant:
         )
         self._start_startup_cache_priming()
 
+        self.loop = asyncio.get_running_loop()
+        from .web_server import start_web_server
+        self.web_server = start_web_server(self, self.config.web_bind_address, self.config.web_port)
+        await self._pre_render_ambient_greetings()
+
+        last_instruction_time = self.loop.time()
+        instruction_interval = 180.0
+
         while True:
-            LOGGER.info('Waiting for wake word "%s"...', self.config.wake_word)
-            await self._wait_for_wake_word(wake_phrases)
-            await self._acknowledge_wake()
-            LOGGER.info("Wake word detected. Start speaking your request.")
-            await self._conversation_loop()
-            self._cleanup_stale_runtime_audio()
-            import gc
-            gc.collect()
-            LOGGER.info("Returning to wake-word listening mode.")
+            self._mode_changed_event.clear()
+
+            if self.current_mode == "live":
+                LOGGER.info('Waiting for wake word "%s"... (Mode: live)', self.config.wake_word)
+                wake_task = asyncio.create_task(self._wait_for_wake_word(wake_phrases))
+                mode_task = asyncio.create_task(self._mode_changed_event.wait())
+                
+                time_since_last = self.loop.time() - last_instruction_time
+                remaining_time = max(0.1, instruction_interval - time_since_last)
+                
+                done, pending = await asyncio.wait(
+                    {wake_task, mode_task},
+                    timeout=remaining_time,
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                if not done:
+                    for task in pending:
+                        task.cancel()
+                    
+                    LOGGER.info("Playing periodic wake-word instructions (EN and VI)...")
+                    instruction_en = "Hello! I am Lemon. If you want to ask me a question, please stand close and say 'Hey Lemon'!"
+                    instruction_vi = "Xin chào! Tôi là Lemon. Để đặt câu hỏi cho tôi, bạn hãy đứng gần và nói 'Xin chào Lemon' nhé!"
+                    
+                    import hashlib
+                    for text, lang in [(instruction_en, "en"), (instruction_vi, "vi")]:
+                        if self.current_mode != "live" or self._mode_changed_event.is_set():
+                            break
+                        h = hashlib.md5(text.encode("utf-8")).hexdigest()
+                        path = self.config.temp_audio_dir / "ambient_rendered" / f"instruction_{lang}_{h}.mp3"
+                        if not path.exists():
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            try:
+                                await asyncio.wait_for(
+                                    self.pipeline.primary_tts_provider.synthesize(text, lang, path),
+                                    timeout=5.0
+                                )
+                            except Exception as exc:
+                                LOGGER.warning("Failed to synthesize wake instruction: %s", exc)
+                                path = None
+                        if path and path.exists():
+                            interrupted = await asyncio.to_thread(
+                                self.player.play_interruptible,
+                                path,
+                                self._should_interrupt_script_manual,
+                                0.0
+                            )
+                            if interrupted:
+                                break
+                            await asyncio.sleep(0.5)
+                    
+                    last_instruction_time = self.loop.time()
+                    continue
+
+
+                for task in pending:
+                    task.cancel()
+
+                if mode_task in done:
+                    last_instruction_time = self.loop.time()
+                    continue
+
+                await self._acknowledge_wake()
+                LOGGER.info("Wake word detected. Start speaking your request.")
+
+                conv_task = asyncio.create_task(self._conversation_loop())
+                mode_task2 = asyncio.create_task(self._mode_changed_event.wait())
+                done, pending = await asyncio.wait(
+                    {conv_task, mode_task2},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+
+                self._cleanup_stale_runtime_audio()
+                import gc
+                gc.collect()
+                LOGGER.info("Returning to wake-word listening mode.")
+                last_instruction_time = self.loop.time()
+
+            elif self.current_mode == "script":
+                LOGGER.info("Standing by in Script Presentation mode...")
+                await self._mode_changed_event.wait()
+
+            elif self.current_mode == "ambient":
+                LOGGER.info("Running in Ambient Broadcast mode...")
+                if not self.ambient_enabled:
+                    self.next_ambient_time = 0.0
+                    await self._mode_changed_event.wait()
+                    continue
+
+                if self.next_ambient_time <= 0.0 or self.next_ambient_time <= self.loop.time():
+                    self.next_ambient_time = self.loop.time() + self.ambient_interval_seconds
+
+                sleep_duration = max(0.1, self.next_ambient_time - self.loop.time())
+                sleep_task = asyncio.create_task(asyncio.sleep(sleep_duration))
+                mode_task = asyncio.create_task(self._mode_changed_event.wait())
+                done, pending = await asyncio.wait(
+                    {sleep_task, mode_task},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+
+                if mode_task in done:
+                    continue
+
+                if self.ambient_enabled and self.ambient_phrases:
+                    import random
+                    phrase_idx = random.randint(0, len(self.ambient_phrases) - 1)
+                    await self.trigger_ambient_broadcast(phrase_idx)
+
+                self.next_ambient_time = self.loop.time() + self.ambient_interval_seconds
+
+    def _detect_language(self, text: str) -> str:
+        from .lang_detect import detect_language
+        return detect_language(text)
+
+    async def _pre_render_ambient_greetings(self) -> None:
+        """Pre-render default ambient greetings on startup."""
+        LOGGER.info("Pre-rendering default ambient greetings...")
+        session_dir = self.config.temp_audio_dir / "ambient_rendered"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        self._ambient_audio_paths = {}
+        for index, phrase in enumerate(self.ambient_phrases):
+            language = self._detect_language(phrase)
+            import hashlib
+            h = hashlib.md5(phrase.encode("utf-8")).hexdigest()
+            output_path = session_dir / f"ambient_{index:03d}_{language}_{h}.mp3"
+            if not output_path.exists():
+                try:
+                    await asyncio.wait_for(
+                        self.pipeline.primary_tts_provider.synthesize(phrase, language, output_path),
+                        timeout=5.0
+                    )
+                except Exception as exc:
+                    LOGGER.exception("Failed to synthesize ambient greeting: %s", exc)
+                    continue
+            self._ambient_audio_paths[index] = output_path
+
+    async def update_script_lines_from_raw(self, script_text: str) -> None:
+        """Parse raw lines, split sentences by punctuation, pre-render TTS, and update script cache."""
+        import re
+        import shutil
+        
+        # Split lines by punctuation (. ! ?) followed by whitespace or end of string
+        raw_lines = [line.strip() for line in script_text.splitlines() if line.strip()]
+        sentences = []
+        for line in raw_lines:
+            # Match sentence ending with punctuation, preserving it
+            parts = re.split(r'(?<=[.!?])\s+', line)
+            for part in parts:
+                if part.strip():
+                    sentences.append(part.strip())
+
+        from .scripted_speech import parse_script_lines
+        parsed_lines = parse_script_lines(tuple(sentences))
+
+        LOGGER.info("Updating script: %d lines parsed. Starting pre-rendering...", len(parsed_lines))
+        
+        # Clean up old script_rendered directory to prevent infinite accumulation
+        session_dir = self.config.temp_audio_dir / "script_rendered"
+        if session_dir.exists():
+            try:
+                shutil.rmtree(session_dir)
+            except Exception as exc:
+                LOGGER.warning("Could not clear script_rendered directory: %s", exc)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        
+        rendered_lines = []
+
+        for line in parsed_lines:
+            language = self._detect_language(line.text)
+            output_path = session_dir / f"line_{line.index:03d}_{uuid4().hex}.mp3"
+            try:
+                await asyncio.wait_for(
+                    self.pipeline.primary_tts_provider.synthesize(line.text, language, output_path),
+                    timeout=5.0
+                )
+                rendered_lines.append((line, output_path))
+                LOGGER.info("Pre-rendered script line %d: %s -> %s", line.index, line.text, output_path)
+            except Exception as exc:
+                LOGGER.exception("Failed to synthesize script line %d: %s", line.index, exc)
+
+        self.script_lines = [item[0] for item in rendered_lines]
+        self.script_audio_paths = {item[0].index: item[1] for item in rendered_lines}
+        self.script_index = 0
+        self.script_autoplay = False
+        LOGGER.info("Script update complete. %d lines pre-rendered.", len(self.script_lines))
+
+    async def _interrupt_current_audio(self) -> None:
+        """Signal ongoing audio playback to stop and wait briefly for active players to yield."""
+        self._audio_interrupt_event.set()
+        await asyncio.sleep(0.2)
+        self._audio_interrupt_event.clear()
+
+    async def trigger_script_next(self) -> None:
+        """Play the next script line and increment the index on success."""
+        await self._interrupt_current_audio()
+        if not self.script_lines or self.script_index >= len(self.script_lines):
+            LOGGER.warning("No script lines to play or end of script reached.")
+            return
+        line = self.script_lines[self.script_index]
+        path = self.script_audio_paths.get(line.index)
+        if path and path.exists():
+            LOGGER.info("Playing script line %d: %s", line.index, line.text)
+            interrupted = await asyncio.to_thread(
+                self.player.play_interruptible,
+                path,
+                self._should_interrupt_script_manual,
+                0.0
+            )
+            if not interrupted:
+                self.script_index += 1
+        else:
+            LOGGER.error("Audio file for script line %d not found: %s", line.index, path)
+
+    async def trigger_script_autoplay(self) -> None:
+        """Autoplay remaining script lines with a delay between them."""
+        await self._interrupt_current_audio()
+        LOGGER.info("Starting script autoplay from index %d...", self.script_index)
+        while self.script_autoplay and self.script_index < len(self.script_lines):
+            line = self.script_lines[self.script_index]
+            path = self.script_audio_paths.get(line.index)
+            if path and path.exists():
+                LOGGER.info("Autoplay script line %d: %s", line.index, line.text)
+                interrupted = await asyncio.to_thread(
+                    self.player.play_interruptible,
+                    path,
+                    self._should_interrupt_script_autoplay,
+                    0.0
+                )
+                if interrupted or not self.script_autoplay:
+                    break
+                
+                self.script_index += 1
+                
+                # Wait for delay (natural 0.4 seconds)
+                delay = 0.4
+                for _ in range(int(delay * 10)):
+                    if not self.script_autoplay or self._mode_changed_event.is_set() or self._audio_interrupt_event.is_set():
+                        break
+                    await asyncio.sleep(0.1)
+            else:
+                LOGGER.error("Audio file not found: %s", path)
+                break
+        
+        if self.script_autoplay and self.script_index >= len(self.script_lines):
+            self.script_autoplay = False
+            self.script_index = 0
+
+    async def trigger_script_stop(self) -> None:
+        """Stop script autoplay and stop active playback."""
+        self.script_autoplay = False
+        await self._interrupt_current_audio()
+
+    def _should_interrupt_script_manual(self) -> bool:
+        """Callback to interrupt manual script playback."""
+        return self._mode_changed_event.is_set() or self._audio_interrupt_event.is_set()
+
+    def _should_interrupt_script_autoplay(self) -> bool:
+        """Callback to interrupt autoplay script playback."""
+        return not self.script_autoplay or self._mode_changed_event.is_set() or self._audio_interrupt_event.is_set()
+
+    async def update_ambient_settings(self, phrases: list[str], interval: float, enabled: bool) -> None:
+        """Update ambient settings and pre-render any new phrases."""
+        import shutil
+        self.ambient_enabled = enabled
+        self.ambient_interval_seconds = interval
+        self.ambient_phrases = tuple(phrases)
+        if self.loop is not None:
+            if enabled:
+                self.next_ambient_time = self.loop.time() + interval
+            else:
+                self.next_ambient_time = 0.0
+
+        # Clean up old ambient_rendered directory to prevent infinite accumulation
+        session_dir = self.config.temp_audio_dir / "ambient_rendered"
+        if session_dir.exists():
+            try:
+                shutil.rmtree(session_dir)
+            except Exception as exc:
+                LOGGER.warning("Could not clear ambient_rendered directory: %s", exc)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        
+        self._ambient_audio_paths = {}
+        for index, phrase in enumerate(self.ambient_phrases):
+            language = self._detect_language(phrase)
+            import hashlib
+            h = hashlib.md5(phrase.encode("utf-8")).hexdigest()
+            output_path = session_dir / f"ambient_{index:03d}_{language}_{h}.mp3"
+            if not output_path.exists():
+                try:
+                    await asyncio.wait_for(
+                        self.pipeline.primary_tts_provider.synthesize(phrase, language, output_path),
+                        timeout=5.0
+                    )
+                except Exception as exc:
+                    LOGGER.exception("Failed to synthesize ambient greeting: %s", exc)
+                    continue
+            self._ambient_audio_paths[index] = output_path
+        self._mode_changed_event.set()
+
+    async def trigger_ambient_broadcast(self, index: int | None = None, text: str | None = None) -> None:
+        """Synthesize and play an ambient announcement or custom greeting immediately."""
+        await self._interrupt_current_audio()
+        
+        if text is not None:
+            phrase = text
+            import hashlib
+            h = hashlib.md5(phrase.encode("utf-8")).hexdigest()
+            path = self.config.temp_audio_dir / "ambient_rendered" / f"custom_{h}.mp3"
+        else:
+            if not self.ambient_phrases:
+                return
+            if index is None:
+                import random
+                index = random.randint(0, len(self.ambient_phrases) - 1)
+
+            if index < 0 or index >= len(self.ambient_phrases):
+                return
+
+            phrase = self.ambient_phrases[index]
+            path = self._ambient_audio_paths.get(index)
+
+        if not path or not path.exists():
+            session_dir = self.config.temp_audio_dir / "ambient_rendered"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            import hashlib
+            h = hashlib.md5(phrase.encode("utf-8")).hexdigest()
+            lang = self._detect_language(phrase)
+            if text is not None:
+                path = session_dir / f"custom_{h}.mp3"
+            else:
+                path = session_dir / f"ambient_{index:03d}_{lang}_{h}.mp3"
+            try:
+                await asyncio.wait_for(
+                    self.pipeline.primary_tts_provider.synthesize(phrase, lang, path),
+                    timeout=5.0
+                )
+                if text is None and index is not None:
+                    self._ambient_audio_paths[index] = path
+            except Exception as exc:
+                LOGGER.exception("Failed to synthesize ambient/custom greeting: %s", exc)
+                return
+
+        LOGGER.info("Broadcasting greeting: %s", phrase)
+        await asyncio.to_thread(
+            self.player.play_interruptible,
+            path,
+            self._should_interrupt_ambient,
+            0.0
+        )
+
+    def _should_interrupt_ambient(self) -> bool:
+        """Callback to interrupt ambient playback."""
+        return self._mode_changed_event.is_set() or self._audio_interrupt_event.is_set()
 
     async def _wait_for_wake_word(self, wake_phrases: tuple[str, ...]) -> None:
         """Listen continuously for wake phrases, falling back to fixed chunks if needed."""
+
+        def should_interrupt_wake() -> bool:
+            return self._mode_changed_event.is_set() or self._audio_interrupt_event.is_set()
 
         if self.pipeline.stt_provider.supports_streaming_wake():
             while True:
@@ -921,6 +1313,7 @@ class LiveVoiceAssistant:
                         input_device_index=self.config.input_device_index,
                         chunk_duration_ms=self.config.streaming_chunk_duration_ms,
                         wake_phrases=wake_phrases,
+                        should_interrupt=should_interrupt_wake,
                     )
                     elapsed_ms = (time.perf_counter() - started_at) * 1000.0
                 except RuntimeError:
@@ -958,6 +1351,7 @@ class LiveVoiceAssistant:
                 self.config.wake_window_seconds,
                 self.config.sample_rate,
                 "wake",
+                self.mic_gain,
             )
             try:
                 audio_stats = await asyncio.to_thread(self.recorder.analyze_wav, capture_path)
@@ -1087,6 +1481,7 @@ class LiveVoiceAssistant:
                         self.config.utterance_seconds,
                         self.config.sample_rate,
                         "utterance",
+                        self.mic_gain,
                     )
                     try:
                         audio_stats = await asyncio.to_thread(self.recorder.analyze_wav, capture_path)
@@ -1318,6 +1713,7 @@ class LiveVoiceAssistant:
             no_progress_seconds=self.config.streaming_no_progress_seconds,
             weak_progress_seconds=self.config.streaming_weak_progress_seconds,
             weak_progress_min_tokens=self.config.streaming_weak_progress_min_tokens,
+            mic_gain=self.mic_gain,
         )
         self._last_request_capture_meta = dict(getattr(self.pipeline.stt_provider, "last_live_capture_stats", {}) or {})
         return transcript
@@ -1434,17 +1830,21 @@ class LiveVoiceAssistant:
         is_pre_rendered = "qa_pre_rendered" in audio_output_path.parts
         interrupted = False
         try:
-            if self._barge_in_enabled():
-                interrupted = await asyncio.to_thread(
-                    self.player.play_interruptible,
-                    audio_output_path,
-                    self._detect_barge_in_sync,
-                    self.config.barge_in_grace_seconds,
-                )
-                if interrupted:
-                    LOGGER.info("Answer playback interrupted by confirmed barge-in phrase.")
-            else:
-                await asyncio.to_thread(self.player.play, audio_output_path)
+            def should_interrupt_qa() -> bool:
+                if self._mode_changed_event.is_set() or self._audio_interrupt_event.is_set():
+                    return True
+                if self._barge_in_enabled() and self._detect_barge_in_sync():
+                    return True
+                return False
+
+            interrupted = await asyncio.to_thread(
+                self.player.play_interruptible,
+                audio_output_path,
+                should_interrupt_qa,
+                self.config.barge_in_grace_seconds if self._barge_in_enabled() else 0.0,
+            )
+            if interrupted and self._barge_in_enabled() and not (self._mode_changed_event.is_set() or self._audio_interrupt_event.is_set()):
+                LOGGER.info("Answer playback interrupted by confirmed barge-in phrase.")
         except RuntimeError:
             LOGGER.exception("Audio playback failed due to runtime configuration error.")
             return False, False
@@ -2023,9 +2423,9 @@ class LiveVoiceAssistant:
                     timeout=self.pipeline.timeout_seconds,
                 )
                 self._cue_cache_paths[cache_key] = cue_path
-            except (RuntimeError, asyncio.TimeoutError, OSError, ValueError):
+            except (RuntimeError, asyncio.TimeoutError, OSError, ValueError) as exc:
                 cue_path.unlink(missing_ok=True)
-                LOGGER.exception("Unable to pre-generate cue audio: type=%s language=%s", cue_type, language)
+                LOGGER.warning("Unable to pre-generate cue audio: type=%s language=%s reason=%s", cue_type, language, str(exc) or type(exc).__name__)
 
     async def _prime_wake_prompt_cache(self) -> None:
         """Pre-generate wake prompt audio once so acknowledgement speech starts faster."""

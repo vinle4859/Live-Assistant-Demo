@@ -271,6 +271,11 @@ def build_live_assistant_config(config: AppConfig) -> LiveAssistantConfig:
         input_device_index=config.input_device_index,
         debug_audio_io=config.debug_audio_io,
         debug_stt_stream=config.debug_stt_stream,
+        web_port=config.web_port,
+        web_bind_address=config.web_bind_address,
+        ambient_greetings=config.ambient_greetings,
+        ambient_interval_seconds=config.ambient_interval_seconds,
+        ambient_enabled=config.ambient_enabled,
     )
 
 

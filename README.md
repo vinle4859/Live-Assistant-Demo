@@ -102,6 +102,22 @@ Required roles for the service account:
 | `roles/aiplatform.user` | Gemini on Vertex AI |
 | `roles/serviceusage.serviceUsageConsumer` | API consumption |
 
+## Deployment Launcher & Diagnostics (Windows Edge Device)
+
+### Edge Deployment Launcher
+The [`run_assistant_edge.bat`](file:///e:/ARL%20Projects/Live%20Assistant/run_assistant_edge.bat) is the single deployment script designed to be run on the edge machine. It automatically:
+- Validates `.env` variables for critical setup (using `tools/check_env.py`).
+- Activates the virtual environment and installs/caches dependencies.
+- Runs audio diagnostics (using `tools/verify_audio.py`) to report input/output devices and master volume levels (pausing if muted or error-level).
+- Spins up a background Cloudflare Quick Tunnel, extracts the ephemeral public URL, and prints it in the console.
+
+### Offline Q&A Batch Diagnostics
+You can validate the routing pipeline (local DB match vs LLM fallback, noise filtering, and bilingual voice routing) offline using:
+```bash
+python tools/diagnose_batch.py
+```
+This runs the Q&A battery defined in [`tools/diagnose_cases.json`](file:///e:/ARL%20Projects/Live%20Assistant/tools/diagnose_cases.json) in milliseconds by mocking network-heavy TTS calls, and prints a final routing accuracy report.
+
 ## Tests
 
 ```bash

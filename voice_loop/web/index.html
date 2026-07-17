@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lemon Voice Assistant - Operator Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0d0f14;
+            --panel-bg: rgba(20, 24, 33, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary-glow: #00ff87;
+            --secondary-glow: #60efff;
+            --danger-glow: #ff416c;
+            --text-color: #f1f3f9;
+            --text-muted: #8a99ad;
+            --accent-active: #00ff87;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(0, 255, 135, 0.03) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(96, 239, 255, 0.03) 0%, transparent 40%);
+            background-attachment: fixed;
+        }
+
+        header {
+            padding: 24px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(13, 15, 20, 0.8);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        h1 {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--primary-glow), var(--secondary-glow));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-header-container {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .status-badge {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.3s ease;
+        }
+
+        .status-badge.active-live {
+            border-color: var(--primary-glow);
+            color: var(--primary-glow);
+            box-shadow: 0 0 10px rgba(0, 255, 135, 0.15);
+        }
+
+        .status-badge.active-script {
+            border-color: var(--secondary-glow);
+            color: var(--secondary-glow);
+            box-shadow: 0 0 10px rgba(96, 239, 255, 0.15);
+        }
+
+        .status-badge.active-ambient {
+            border-color: var(--primary-glow);
+            color: var(--primary-glow);
+            box-shadow: 0 0 10px rgba(0, 255, 135, 0.15);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--text-muted);
+            display: inline-block;
+        }
+
+        .active-live .status-dot { background-color: var(--primary-glow); animation: pulse 1.5s infinite; }
+        .active-script .status-dot { background-color: var(--secondary-glow); animation: pulse 1.5s infinite; }
+        .active-ambient .status-dot { background-color: var(--primary-glow); animation: pulse 1.5s infinite; }
+
+        @keyframes pulse {
+            0% { transform: scale(0.9); opacity: 0.6; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+
+        main {
+            padding: 40px;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            flex-grow: 1;
+        }
+
+        @media (max-width: 1024px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 28px;
+            backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .panel:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .panel-title {
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .panel-title span {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        /* Controls Section */
+        .controls-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
+        }
+
+        .mode-cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .mode-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            padding: 20px 16px;
+            border-radius: 12px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .mode-card:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .mode-card.active {
+            background: rgba(0, 255, 135, 0.04);
+            border-color: var(--primary-glow);
+            box-shadow: inset 0 0 12px rgba(0, 255, 135, 0.05);
+        }
+
+        .mode-card.active.mode-script {
+            background: rgba(96, 239, 255, 0.04);
+            border-color: var(--secondary-glow);
+        }
+
+        .mode-icon {
+            font-size: 24px;
+            transition: transform 0.3s ease;
+        }
+
+        .mode-card:hover .mode-icon {
+            transform: scale(1.1);
+        }
+
+        .mode-title {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .mode-card.active .mode-title {
+            color: var(--primary-glow);
+        }
+
+        .mode-card.active.mode-script .mode-title {
+            color: var(--secondary-glow);
+        }
+
+        /* Gain Slider */
+        .gain-container {
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .gain-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .gain-value {
+            color: var(--primary-glow);
+            font-family: monospace;
+            font-weight: 600;
+        }
+
+        .slider-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        input[type="range"] {
+            flex-grow: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            outline: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary-glow);
+            box-shadow: 0 0 10px rgba(0, 255, 135, 0.5);
+            transition: transform 0.1s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        /* Common inputs & Buttons */
+        textarea {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            color: var(--text-color);
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            line-height: 1.6;
+            resize: vertical;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        textarea:focus {
+            border-color: rgba(255, 255, 255, 0.25);
+        }
+
+        button {
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid transparent;
+            outline: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00ff87, #60efff);
+            color: #0d0f14;
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 0 15px rgba(0, 255, 135, 0.3);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--border-color);
+            color: var(--text-color);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-danger {
+            background: rgba(255, 65, 108, 0.1);
+            border-color: var(--danger-glow);
+            color: #ff6b8b;
+        }
+
+        .btn-danger:hover {
+            background: rgba(255, 65, 108, 0.2);
+            box-shadow: 0 0 15px rgba(255, 65, 108, 0.2);
+        }
+
+        /* Script Stepper */
+        .script-lines-list {
+            max-height: 280px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.15);
+        }
+
+        .script-line-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            font-size: 13px;
+            transition: background 0.3s;
+        }
+
+        .script-line-item:last-child {
+            border-bottom: none;
+        }
+
+        .line-index-badge {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: monospace;
+            color: var(--text-muted);
+            min-width: 28px;
+            text-align: center;
+        }
+
+        .script-line-item.completed {
+            opacity: 0.5;
+        }
+
+        .script-line-item.active {
+            background: rgba(96, 239, 255, 0.06);
+            border-left: 3px solid var(--secondary-glow);
+            font-weight: 500;
+        }
+
+        .script-line-item.active .line-index-badge {
+            background: var(--secondary-glow);
+            color: #0d0f14;
+        }
+
+        .stepper-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        /* Ambient Greetings */
+        .phrases-list-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .phrase-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+        }
+        .phrase-row.dragging {
+            opacity: 0.3;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+        .drag-handle {
+            user-select: none;
+            cursor: grab;
+            padding: 4px 8px;
+            color: var(--text-muted);
+            font-size: 16px;
+        }
+
+        .phrase-row input {
+            flex-grow: 1;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: var(--text-color);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .phrase-row input:focus {
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .delete-btn {
+            background: transparent;
+            border: none;
+            font-size: 18px;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .delete-btn:hover {
+            color: var(--danger-glow);
+        }
+
+        .ambient-status {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 14px;
+        }
+
+        .countdown-display {
+            font-weight: 600;
+            color: var(--primary-glow);
+            font-family: monospace;
+            font-size: 16px;
+        }
+
+        /* Quick-Play Wake Greetings */
+        .quick-play-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        .quick-play-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+            gap: 16px;
+        }
+
+        .quick-play-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--primary-glow);
+            transform: translateX(4px);
+        }
+
+        .quick-play-card span {
+            flex-grow: 1;
+            line-height: 1.5;
+        }
+
+        .play-icon {
+            font-size: 18px;
+            color: var(--primary-glow);
+            opacity: 0.7;
+            transition: opacity 0.3s;
+        }
+
+        .quick-play-card:hover .play-icon {
+            opacity: 1;
+        }
+
+        /* Footer */
+        footer {
+            padding: 20px 40px;
+            text-align: center;
+            font-size: 11px;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+            background: rgba(13, 15, 20, 0.9);
+            margin-top: 40px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🤖 LEMON OPERATOR DASHBOARD</h1>
+        <div class="status-header-container">
+            <div id="active-state-badge" class="status-badge">
+                <span class="status-dot"></span>
+                <span id="active-state-text">IDLE</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Panel 1: Mode Controller & Mic Gain -->
+        <div class="panel">
+            <h2 class="panel-title">Operational Mode <span>MANUAL SWITCH</span></h2>
+            
+            <div class="controls-grid">
+                <div class="mode-cards">
+                    <div id="mode-live" class="mode-card active" onclick="setMode('live')">
+                        <div class="mode-icon">🎙️</div>
+                        <div class="mode-title">Conversational Q&A</div>
+                    </div>
+                    <div id="mode-script" class="mode-card mode-script" onclick="setMode('script')">
+                        <div class="mode-icon">📜</div>
+                        <div class="mode-title">Script Presentation</div>
+                    </div>
+                    <div id="mode-ambient" class="mode-card" onclick="setMode('ambient')">
+                        <div class="mode-icon">📢</div>
+                        <div class="mode-title">Ambient Broadcast</div>
+                    </div>
+                </div>
+
+                <div class="gain-container">
+                    <div class="gain-header">
+                        <span>Microphone Gain Multiplier</span>
+                        <span id="gain-val-label" class="gain-value">1.0x</span>
+                    </div>
+                    <div class="slider-wrapper">
+                        <span>Min</span>
+                        <input id="mic-gain-slider" type="range" min="0.1" max="3.0" step="0.1" value="1.0" oninput="updateGainLabel(this.value)" onchange="sendMicGain(this.value)">
+                        <span>Max</span>
+                    </div>
+                </div>
+
+                <!-- Emergency Panic Stop -->
+                <button class="btn-danger" style="margin-top: 10px;" onclick="panicStop()">
+                    🛑 EMERGENCY PANIC AUDIO STOP
+                </button>
+            </div>
+        </div>
+
+        <!-- Panel 2: Script presentation manager -->
+        <div id="panel-script" class="panel">
+            <h2 class="panel-title">Presentation Script Manager <span>PRE-RENDERING SUPPORT</span></h2>
+            
+            <div class="script-editor-container" style="display: flex; flex-direction: column; gap: 12px;">
+                <label style="font-size: 12px; font-weight: 600; color: var(--text-muted);">RAW PRESENTATION SCRIPT (One phrase per line)</label>
+                <textarea id="script-raw-textarea" rows="4" placeholder="Hello! I am Lemon.&#10;Xin chào, tôi là Lemon.&#10;I can guide you through the event today."></textarea>
+                <button class="btn-primary" onclick="updateScript()">
+                    ⚡ Apply & Pre-render TTS Audio
+                </button>
+            </div>
+
+            <div class="script-list-container" style="display: flex; flex-direction: column; gap: 12px;">
+                <label style="font-size: 12px; font-weight: 600; color: var(--text-muted);">STEPPER MONITOR</label>
+                <div id="script-lines-list" class="script-lines-list">
+                    <div class="script-line-item" style="color: var(--text-muted); font-style: italic; justify-content: center;">
+                        No presentation script loaded. Paste script above to begin.
+                    </div>
+                </div>
+                
+                <div class="stepper-actions">
+                    <button id="btn-play-all" class="btn-primary" style="flex-grow: 1;" onclick="scriptAction('play_all')">🔁 Autoplay All</button>
+                    <button id="btn-stop-script" class="btn-secondary" style="flex-grow: 1;" onclick="scriptAction('stop')">⏸️ Stop Autoplay</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Panel 3: Ambient Greetings Panel -->
+        <div id="panel-ambient" class="panel">
+            <h2 class="panel-title">Ambient Broadcast Config <span>PERIODIC ANNOUNCEMENTS</span></h2>
+            
+            <div class="ambient-status">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <span style="font-weight: 500;">Periodic Broadcaster Status</span>
+                    <span id="ambient-active-label" style="font-size: 12px; color: var(--text-muted);">Disabled</span>
+                </div>
+                <div>
+                    <span id="countdown-timer" class="countdown-display">--:--</span>
+                </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+                <div class="gain-container" style="padding: 16px;">
+                    <div class="gain-header">
+                        <span>Announcement Interval (Minutes)</span>
+                        <span id="interval-val-label" class="gain-value">5 min</span>
+                    </div>
+                    <div class="slider-wrapper">
+                        <span>1m</span>
+                        <input id="ambient-interval-slider" type="range" min="1" max="20" step="1" value="5" oninput="updateIntervalLabel(this.value)" onchange="sendAmbientSettings()">
+                        <span>20m</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 13px; font-weight: 600; color: var(--text-muted);">ROTATING ANNOUNCEMENT PHRASES</span>
+                        <button class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="addPhraseRow()">+ Add Row</button>
+                    </div>
+                    
+                    <div id="phrases-rows-container" class="phrases-list-container">
+                        <!-- Populated by script -->
+                    </div>
+                </div>
+
+                <div class="stepper-actions">
+                    <button id="btn-toggle-ambient" class="btn-primary" style="flex-grow: 1;" onclick="toggleAmbientEnabled()">Enable Periodic Broadcast</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        LEMON VOICE ASSISTANT OPERATOR DASHBOARD • RUNNING LOCAL WINDOWS DEPLOYMENT
+    </footer>
+
+    <script>
+        const API_BASE = "";
+        let isEditingPhrases = false;
+        let cachedPhrasesJson = "";
+        let lastState = null;
+
+        async function fetchState() {
+            try {
+                const response = await fetch(`${API_BASE}/api/state`);
+                const data = await response.json();
+                updateUI(data);
+            } catch (err) {
+                console.error("Failed to fetch state:", err);
+            }
+        }
+
+        function updateUI(state) {
+            lastState = state;
+
+            // Toggle panels visibility based on active mode
+            const panelScript = document.getElementById('panel-script');
+            const panelAmbient = document.getElementById('panel-ambient');
+            const mainGrid = document.querySelector('main');
+
+            if (state.mode === 'live') {
+                panelScript.style.display = 'none';
+                panelAmbient.style.display = 'none';
+                mainGrid.style.gridTemplateColumns = '1fr';
+            } else if (state.mode === 'script') {
+                panelScript.style.display = 'flex';
+                panelAmbient.style.display = 'none';
+                mainGrid.style.gridTemplateColumns = '1fr 1fr';
+            } else if (state.mode === 'ambient') {
+                panelScript.style.display = 'none';
+                panelAmbient.style.display = 'flex';
+                mainGrid.style.gridTemplateColumns = '1fr 1fr';
+            }
+
+            // Update Active Mode Card
+            document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
+            const activeCard = document.getElementById(`mode-${state.mode}`);
+            if (activeCard) {
+                activeCard.classList.add('active');
+            }
+
+            // Update Header Status Badge
+            const badge = document.getElementById('active-state-badge');
+            const badgeText = document.getElementById('active-state-text');
+            badge.className = 'status-badge';
+            
+            if (state.mode === 'live') {
+                badge.classList.add('active-live');
+                badgeText.textContent = "Conversational Q&A";
+            } else if (state.mode === 'script') {
+                badge.classList.add('active-script');
+                badgeText.textContent = state.script_autoplay ? "PLAYING SCRIPT" : "SCRIPT MODE";
+            } else if (state.mode === 'ambient') {
+                badge.classList.add('active-ambient');
+                badgeText.textContent = state.ambient_enabled ? "AMBIENT ACTIVE" : "AMBIENT STANDBY";
+            }
+
+            // Update Mic Gain
+            const gainSlider = document.getElementById('mic-gain-slider');
+            if (document.activeElement !== gainSlider) {
+                gainSlider.value = state.mic_gain;
+                document.getElementById('gain-val-label').textContent = `${state.mic_gain.toFixed(1)}x`;
+            }
+
+            // Update Script presentation monitor
+            const listContainer = document.getElementById('script-lines-list');
+            if (state.script_lines.length === 0) {
+                listContainer.innerHTML = `
+                    <div class="script-line-item" style="color: var(--text-muted); font-style: italic; justify-content: center;">
+                        No presentation script loaded. Paste script above to begin.
+                    </div>`;
+            } else {
+                let html = '';
+                state.script_lines.forEach((line, idx) => {
+                    let className = 'script-line-item';
+                    if (idx < state.script_index) {
+                        className += ' completed';
+                    } else if (idx === state.script_index) {
+                        className += ' active';
+                    }
+                    html += `
+                        <div class="${className}" onclick="setScriptIndex(${idx})">
+                            <span class="line-index-badge">${line.index}</span>
+                            <span>${line.text}</span>
+                        </div>
+                    `;
+                });
+                listContainer.innerHTML = html;
+            }
+
+            // Update Ambient config
+            const toggleAmbientBtn = document.getElementById('btn-toggle-ambient');
+            const ambientLabel = document.getElementById('ambient-active-label');
+            if (state.ambient_enabled && state.mode === 'ambient') {
+                toggleAmbientBtn.textContent = "Disable Periodic Broadcast";
+                toggleAmbientBtn.className = "btn-secondary";
+                ambientLabel.textContent = "Enabled & Running";
+                
+                // Format countdown timer
+                const countdown = Math.round(state.next_ambient_countdown);
+                if (countdown > 0) {
+                    const mins = Math.floor(countdown / 60);
+                    const secs = countdown % 60;
+                    document.getElementById('countdown-timer').textContent = 
+                        `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                } else {
+                    document.getElementById('countdown-timer').textContent = "00:00";
+                }
+            } else if (state.ambient_enabled) {
+                toggleAmbientBtn.textContent = "Disable Periodic Broadcast";
+                toggleAmbientBtn.className = "btn-secondary";
+                ambientLabel.textContent = "Standby (Q&A/Script Active)";
+                document.getElementById('countdown-timer').textContent = "--:--";
+            } else {
+                toggleAmbientBtn.textContent = "Enable Periodic Broadcast";
+                toggleAmbientBtn.className = "btn-primary";
+                ambientLabel.textContent = "Disabled";
+                document.getElementById('countdown-timer').textContent = "--:--";
+            }
+
+            const intervalSlider = document.getElementById('ambient-interval-slider');
+            if (document.activeElement !== intervalSlider) {
+                const minsVal = Math.round(state.ambient_interval / 60);
+                intervalSlider.value = minsVal;
+                document.getElementById('interval-val-label').textContent = `${minsVal} min`;
+            }
+
+            // Render phrases list rows if operator is not editing them and it changed
+            const currentPhrasesJson = JSON.stringify(state.ambient_phrases);
+            if (!isEditingPhrases && currentPhrasesJson !== cachedPhrasesJson) {
+                cachedPhrasesJson = currentPhrasesJson;
+                const phraseContainer = document.getElementById('phrases-rows-container');
+                phraseContainer.innerHTML = '';
+                state.ambient_phrases.forEach((phrase, idx) => {
+                    const row = document.createElement('div');
+                    row.className = 'phrase-row';
+                    row.innerHTML = `
+                        <input type="text" value="${phrase}" onfocus="isEditingPhrases=true" onblur="handlePhraseBlur()" onchange="savePhrasesFromUI()">
+                        <button class="delete-btn" style="font-size: 14px; padding: 2px 6px;" onclick="playSingleAmbientPhrase(${idx})">▶️</button>
+                        <button class="delete-btn" onclick="deletePhraseRow(${idx})">🗑️</button>
+                    `;
+                    phraseContainer.appendChild(row);
+                });
+            }
+        }
+
+        function handlePhraseBlur() {
+            // Wait slightly before setting false to allow onchange to fire
+            setTimeout(() => {
+                isEditingPhrases = false;
+            }, 200);
+        }
+
+        async function setMode(mode) {
+            try {
+                await fetch(`${API_BASE}/api/mode`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({mode})
+                });
+                fetchState();
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function updateGainLabel(val) {
+            document.getElementById('gain-val-label').textContent = `${parseFloat(val).toFixed(1)}x`;
+        }
+
+        async function sendMicGain(val) {
+            try {
+                await fetch(`${API_BASE}/api/mic_gain`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({gain: parseFloat(val)})
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function updateIntervalLabel(val) {
+            document.getElementById('interval-val-label').textContent = `${val} min`;
+        }
+
+        async function sendAmbientSettings() {
+            const intervalVal = parseInt(document.getElementById('ambient-interval-slider').value) * 60;
+            const phrasesInputs = document.querySelectorAll('#phrases-rows-container input');
+            const phrases = Array.from(phrasesInputs).map(inp => inp.value.trim()).filter(p => p);
+
+            try {
+                await fetch(`${API_BASE}/api/ambient/settings`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        interval: intervalVal,
+                        phrases: phrases
+                    })
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function savePhrasesFromUI() {
+            sendAmbientSettings();
+        }
+
+        async function toggleAmbientEnabled() {
+            const labelText = document.getElementById('ambient-active-label').textContent;
+            const enabled = labelText === "Disabled";
+            try {
+                await fetch(`${API_BASE}/api/ambient/settings`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled})
+                });
+                fetchState();
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function playSingleAmbientPhrase(idx) {
+            try {
+                await fetch(`${API_BASE}/api/ambient/broadcast_now`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({index: idx})
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function addPhraseRow() {
+            const container = document.getElementById('phrases-rows-container');
+            const idx = container.querySelectorAll('.phrase-row').length;
+            const row = document.createElement('div');
+            row.className = 'phrase-row';
+            row.innerHTML = `
+                <input type="text" placeholder="Enter greeting announcement phrase..." onfocus="isEditingPhrases=true" onblur="handlePhraseBlur()" onchange="savePhrasesFromUI()">
+                <button class="delete-btn" style="font-size: 14px; padding: 2px 6px;" onclick="playSingleAmbientPhrase(${idx})">▶️</button>
+                <button class="delete-btn" onclick="this.parentElement.remove(); savePhrasesFromUI();">🗑️</button>
+            `;
+            container.appendChild(row);
+            row.querySelector('input').focus();
+        }
+
+        async function deletePhraseRow(idx) {
+            const rows = document.querySelectorAll('#phrases-rows-container .phrase-row');
+            if (rows[idx]) {
+                rows[idx].remove();
+            }
+            sendAmbientSettings();
+        }
+
+        async function updateScript() {
+            const textarea = document.getElementById('script-raw-textarea');
+            const rawText = textarea.value.trim();
+            if (!rawText) {
+                alert("Please enter at least one presentation line.");
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/script/update`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({script_text: rawText})
+                });
+                const res = await response.json();
+                if (res.status === 'success') {
+                    alert("Script loaded. Pre-rendering TTS audio files in background. Click Stepper Monitor to track.");
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function scriptAction(action) {
+            try {
+                // Autoplay All should activate Script Presentation mode if not already in it
+                if (action === 'play_all' && lastState && lastState.mode !== 'script') {
+                    await fetch(`${API_BASE}/api/mode`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({mode: 'script'})
+                    });
+                }
+                await fetch(`${API_BASE}/api/script/control`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action})
+                });
+                fetchState();
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function setScriptIndex(idx) {
+            try {
+                await fetch(`${API_BASE}/api/script/control`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: 'set_index', index: idx})
+                });
+                fetchState();
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function panicStop() {
+            try {
+                await fetch(`${API_BASE}/api/script/control`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: 'stop'})
+                });
+                // Switch mode to live/Q&A or just toggle mode event to interrupt
+                await fetch(`${API_BASE}/api/mode`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({mode: 'live'})
+                });
+                fetchState();
+                alert("Panic stop triggered. Audio aborted and mode reset to Q&A Conversational.");
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // Poll State
+        setInterval(fetchState, 1000);
+        fetchState();
+    </script>
+</body>
+</html>

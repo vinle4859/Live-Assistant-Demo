@@ -35,7 +35,8 @@ data/web_faq_qa_vi.json
 .tmp_*.html
 tmp_*.py
 temp_pytest/
-
+temp_pytest_*/
+temp_pytest*
 # OS/editor noise
 .DS_Store
 Thumbs.db
